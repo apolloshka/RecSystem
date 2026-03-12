@@ -56,3 +56,15 @@ print("Top recommendations:")
 
 for g, score in recommendations[:20]:
     print(g, score)
+
+
+# --- СОХРАНЕНИЕ В ФАЙЛ ---
+
+with open("user_based_recommendations.txt", "w", encoding="utf-8") as f:
+    f.write("Top recommendations:\n\n")
+
+    for g, score in recommendations[:20]:
+        line = f"{g} {score}\n"
+        f.write(line)
+
+print("\nРезультаты сохранены в файл user_based_recommendations.txt")
