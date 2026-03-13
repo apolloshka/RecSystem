@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import random
 import requests
 from dotenv import load_dotenv
 
@@ -17,8 +18,11 @@ def vk_call(method, params=None):
     params["access_token"] = TOKEN
     params["v"] = V
 
-    r = requests.get(API_URL + method, params=params)
-    data = r.json()
+    try:
+        r = requests.get(API_URL + method, params=params)
+        data = r.json()
+    except Exception:
+        return None
 
     if "error" in data:
         return None
@@ -26,19 +30,31 @@ def vk_call(method, params=None):
     return data["response"]
 
 
-user_groups = {}
+# ---------- загрузка пользователей ----------
 
-with open("members.txt", "r") as f:
+with open("members.txt", "r", encoding="utf-8") as f:
     users = [line.strip() for line in f]
 
 print("Users loaded:", len(users))
 
-MAX_USERS = 800
+
+# ---------- случайная выборка ----------
+
+MAX_USERS = 1500
+
+random.seed(42)      # фиксируем случайность (для воспроизводимости)
+random.shuffle(users)
+
+users = users[:MAX_USERS]
+
+
+
+user_groups = {}
 
 ok = 0
 fail = 0
 
-for i, uid in enumerate(users[:MAX_USERS]):
+for i, uid in enumerate(users):
 
     response = vk_call("groups.get", {
         "user_id": uid,
@@ -48,7 +64,7 @@ for i, uid in enumerate(users[:MAX_USERS]):
     if response is None:
         fail += 1
     else:
-        groups = response["items"]
+        groups = response.get("items", [])
         user_groups[uid] = groups
         ok += 1
 
@@ -58,9 +74,11 @@ for i, uid in enumerate(users[:MAX_USERS]):
     time.sleep(0.35)
 
 
-with open("user_groups.json", "w") as f:
+# ---------- сохранение ----------
+
+with open("user_groups.json", "w", encoding="utf-8") as f:
     json.dump(user_groups, f)
 
-print("Dataset saved")
+print("\nDataset saved")
 print("Users with data:", ok)
 print("Users failed:", fail)
