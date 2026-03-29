@@ -1,0 +1,106 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: vk_clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      CLICKHOUSE_DB: vk_diploma
+      CLICKHOUSE_USER: vk_user
+      CLICKHOUSE_PASSWORD: vk_password
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+
+  postgres:
+    image: postgres:15
+    container_name: airflow_postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  airflow-init:
+    image: apache/airflow:2.10.5
+    container_name: airflow_init
+    depends_on:
+      - postgres
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      _PIP_ADDITIONAL_REQUIREMENTS: "requests python-dotenv clickhouse-connect pandas"
+      PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
+      PIP_TRUSTED_HOST: "pypi.tuna.tsinghua.edu.cn"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./:/opt/airflow/project
+    command: >
+      bash -c "
+      airflow db migrate &&
+      airflow users create
+        --username admin
+        --password admin
+        --firstname Polina
+        --lastname Zonina
+        --role Admin
+        --email admin@example.com
+      "
+
+  airflow-webserver:
+    image: apache/airflow:2.10.5
+    container_name: airflow_webserver
+    depends_on:
+      - postgres
+      - airflow-init
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      _PIP_ADDITIONAL_REQUIREMENTS: "requests python-dotenv clickhouse-connect pandas"
+      PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
+      PIP_TRUSTED_HOST: "pypi.tuna.tsinghua.edu.cn"
+      PYTHONPATH: "/opt/airflow/project"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./:/opt/airflow/project
+    command: airflow webserver
+
+  airflow-scheduler:
+    image: apache/airflow:2.10.5
+    container_name: airflow_scheduler
+    depends_on:
+      - postgres
+      - airflow-init
+    restart: always
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      _PIP_ADDITIONAL_REQUIREMENTS: "requests python-dotenv clickhouse-connect pandas"
+      PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
+      PIP_TRUSTED_HOST: "pypi.tuna.tsinghua.edu.cn"
+      PYTHONPATH: "/opt/airflow/project"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./:/opt/airflow/project
+    command: airflow scheduler
+
+volumes:
+  clickhouse_data:
+  postgres_data:
