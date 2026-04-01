@@ -10,9 +10,9 @@ TOKEN = os.getenv("VK_TOKEN")
 V = os.getenv("VK_API_VERSION", "5.131")
 API_URL = "https://api.vk.com/method/"
 
-DELAY_BETWEEN_REQUESTS = 0.34
-DELAY_ON_FLOOD = 60
-MAX_MEMBERS_PER_GROUP = 5000  # ← ограничение: максимум 5000 участников с группы
+DELAY_BETWEEN_REQUESTS = 1
+DELAY_ON_FLOOD = 120
+MAX_MEMBERS_PER_GROUP = 2000  # максимум участников с группы
 
 
 def vk_call(method, params=None, retry=3):

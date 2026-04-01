@@ -10,27 +10,40 @@ TOKEN = os.getenv("VK_TOKEN")
 V = os.getenv("VK_API_VERSION", "5.131")
 API_URL = "https://api.vk.com/method/"
 
-USERS_PER_GROUP = 500    # сколько брать из каждой группы
-SLEEP_SECONDS = 0.35      # задержка между запросами
+USERS_PER_GROUP = 350    # сколько брать из каждой группы
+SLEEP_SECONDS = 1.5      # задержка между запросами
 
 
-def vk_call(method, params=None):
+def vk_call(method, params=None, retry=3):
     params = params or {}
     params["access_token"] = TOKEN
     params["v"] = V
 
-    try:
-        r = requests.get(API_URL + method, params=params, timeout=30)
-        data = r.json()
-    except Exception as e:
-        print("Request error:", e)
-        return None
+    for attempt in range(retry):
+        try:
+            r = requests.get(API_URL + method, params=params, timeout=30)
+            data = r.json()
+        except Exception as e:
+            print(f"Request error: {e}")
+            if attempt < retry - 1:
+                time.sleep(SLEEP_SECONDS * 2)
+            continue
 
-    if "error" in data:
-        print(f"VK API error: {data['error']}")
-        return None
+        if "error" in data:
+            error_code = data["error"].get("error_code")
+            if error_code in (6, 9):  # Rate limit or Flood control
+                wait_time = SLEEP_SECONDS * (attempt + 1) * 2
+                print(f"  Rate limit (error {error_code}), waiting {wait_time:.1f}s...")
+                time.sleep(wait_time)
+                continue
+            else:
+                print(f"VK API error: {data['error']}")
+                return None
 
-    return data["response"]
+        return data["response"]
+
+    print(f"  Failed after {retry} attempts")
+    return None
 
 
 def load_balanced_users_from_clickhouse(users_per_group: int):
@@ -105,6 +118,12 @@ def main():
 
         if i % 50 == 0 or i == len(users):
             print(f"processed {i}/{len(users)} | ok={ok} fail={fail}")
+
+        # Сохраняем промежуточные результаты каждые 100 пользователей
+        if i % 100 == 0 and user_groups:
+            truncate_user_groups()
+            insert_user_groups(user_groups)
+            print(f"  [Checkpoint] Saved {len(user_groups)} users so far")
 
         time.sleep(SLEEP_SECONDS)
 

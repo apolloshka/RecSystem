@@ -32,6 +32,8 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__API__SECRET_KEY: "my-super-secret-key-12345"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "my-super-secret-key-12345"
       _PIP_ADDITIONAL_REQUIREMENTS: "requests python-dotenv clickhouse-connect pandas"
       PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
       PIP_TRUSTED_HOST: "pypi.tuna.tsinghua.edu.cn"
@@ -66,7 +68,9 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
-      _PIP_ADDITIONAL_REQUIREMENTS: "requests python-dotenv clickhouse-connect pandas"
+      AIRFLOW__API__SECRET_KEY: "my-super-secret-key-12345"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "my-super-secret-key-12345"
+      _PIP_ADDITIONAL_REQUIREMENTS: "requests python-dotenv clickhouse-connect pandas matplotlib"
       PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
       PIP_TRUSTED_HOST: "pypi.tuna.tsinghua.edu.cn"
       PYTHONPATH: "/opt/airflow/project"
@@ -89,7 +93,9 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
-      _PIP_ADDITIONAL_REQUIREMENTS: "requests python-dotenv clickhouse-connect pandas"
+      AIRFLOW__API__SECRET_KEY: "my-super-secret-key-12345"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "my-super-secret-key-12345"
+      _PIP_ADDITIONAL_REQUIREMENTS: "requests python-dotenv clickhouse-connect pandas matplotlib"
       PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
       PIP_TRUSTED_HOST: "pypi.tuna.tsinghua.edu.cn"
       PYTHONPATH: "/opt/airflow/project"
