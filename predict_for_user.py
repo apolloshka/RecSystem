@@ -1,6 +1,7 @@
 import joblib
 import math
 import time
+import random
 import numpy as np
 from collections import defaultdict
 from src.db.clickhouse_client import get_client, get_group_name_from_db, save_group_name
@@ -11,52 +12,53 @@ client = get_client()
 model = joblib.load('recommendation_model.pkl')
 scaler = joblib.load('feature_scaler.pkl')
 
-# Загружаем данные
 group_to_users = defaultdict(set)
 for user_id, group_id in client.query("SELECT user_id, group_id FROM user_groups").result_rows:
     group_to_users[int(group_id)].add(int(user_id))
 
+group_popularity = {g: len(users) for g, users in group_to_users.items()}
+
 my_groups = [row[0] for row in client.query("SELECT group_id FROM my_groups").result_rows]
 print(f"My groups: {len(my_groups)}")
 
-# Определяем признаки (из модели)
-feature_names = [f"feature_{i}" for i in range(model.coef_.shape[1])]
+# ----- ФИЛЬТРАЦИЯ КАНДИДАТОВ -----
+# 1. Берём группы из user_based и item_based рекомендаций
+good_groups = set()
+for row in client.query("SELECT recommended_group_id FROM user_based_recommendations LIMIT 1000").result_rows:
+    good_groups.add(row[0])
+for row in client.query("SELECT recommended_group_id FROM item_based_recommendations LIMIT 1000").result_rows:
+    good_groups.add(row[0])
 
-# Функция извлечения признаков
+# 2. Добавляем популярные группы для разнообразия
+popular_candidates = [
+    g for g, pop in group_popularity.items() 
+    if pop > 100 and g not in good_groups and g not in my_groups
+]
+popular_sample = random.sample(popular_candidates, min(300, len(popular_candidates)))
+
+# 3. Объединяем
+candidates = list(good_groups) + popular_sample
+candidates = [g for g in candidates if g not in my_groups]
+print(f"Candidates for prediction: {len(candidates)}")
+
 def extract_features(group_id):
     group_users = group_to_users.get(group_id, set())
     group_pop = len(group_users)
     log_pop = math.log(1 + group_pop)
     
-    # Item-based Jaccard
-    total_jaccard = 0.0
-    for my_group in my_groups:
-        my_users = group_to_users.get(my_group, set())
-        if not my_users:
-            continue
-        inter = len(group_users & my_users)
-        union = len(group_users | my_users)
-        if union > 0:
-            total_jaccard += inter / union
-    avg_jaccard = total_jaccard / len(my_groups) if my_groups else 0.0
+    user_score_result = client.query(f"SELECT score FROM user_based_recommendations WHERE recommended_group_id = {group_id} LIMIT 1")
+    user_based_score = user_score_result.result_rows[0][0] if user_score_result.result_rows else 0.0
     
-    # User-based similar users
-    similar_count = 0
-    for user in list(group_users)[:50]:
-        user_groups = client.query(f"SELECT group_id FROM user_groups WHERE user_id = {user} LIMIT 10").result_rows
-        user_set = {row[0] for row in user_groups}
-        if set(my_groups) & user_set:
-            similar_count += 1
+    item_score_result = client.query(f"SELECT score FROM item_based_recommendations WHERE recommended_group_id = {group_id} LIMIT 1")
+    item_based_score = item_score_result.result_rows[0][0] if item_score_result.result_rows else 0.0
     
     return np.array([[
-        len(my_groups),
         group_pop,
         log_pop,
-        avg_jaccard,
-        similar_count
+        user_based_score,
+        item_based_score
     ]])
 
-# Получение названия группы
 def get_group_name_safe(group_id):
     name = get_group_name_from_db(group_id)
     if name:
@@ -80,18 +82,13 @@ def get_group_name_safe(group_id):
         pass
     return "unknown"
 
-# Предсказание
 def predict(group_id):
     features = extract_features(group_id)
     features_scaled = scaler.transform(features)
     return model.predict_proba(features_scaled)[0][1]
 
-# Кандидаты
-all_groups = list(group_to_users.keys())
-candidates = [g for g in all_groups if g not in my_groups]
-
 print("Predicting...")
-preds = [(g, predict(g)) for g in candidates[:500]]
+preds = [(g, predict(g)) for g in candidates[:1000]]
 preds.sort(key=lambda x: x[1], reverse=True)
 
 print("Fetching names for top-30...")

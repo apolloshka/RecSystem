@@ -41,30 +41,19 @@ def extract_features(group_id):
     group_pop = len(group_users)
     log_pop = math.log(1 + group_pop)
     
-    total_jaccard = 0.0
-    for my_group in my_groups:
-        my_users = group_to_users.get(my_group, set())
-        if not my_users:
-            continue
-        inter = len(group_users & my_users)
-        union = len(group_users | my_users)
-        if union > 0:
-            total_jaccard += inter / union
-    avg_jaccard = total_jaccard / len(my_groups) if my_groups else 0.0
+    # User-based score
+    user_score_result = client.query(f"SELECT score FROM user_based_recommendations WHERE recommended_group_id = {group_id} LIMIT 1")
+    user_based_score = user_score_result.result_rows[0][0] if user_score_result.result_rows else 0.0
     
-    similar_users_count = 0
-    for user in list(group_users)[:50]:
-        user_groups = client.query(f"SELECT group_id FROM user_groups WHERE user_id = {user} LIMIT 10").result_rows
-        user_set = {row[0] for row in user_groups}
-        if set(my_groups) & user_set:
-            similar_users_count += 1
+    # Item-based score
+    item_score_result = client.query(f"SELECT score FROM item_based_recommendations WHERE recommended_group_id = {group_id} LIMIT 1")
+    item_based_score = item_score_result.result_rows[0][0] if item_score_result.result_rows else 0.0
     
     return {
-        "user_group_count": len(my_groups),
         "group_popularity": group_pop,
         "log_group_popularity": log_pop,
-        "avg_jaccard": avg_jaccard,
-        "similar_users_count": similar_users_count
+        "user_based_score": user_based_score,
+        "item_based_score": item_based_score
     }
 
 sample_features = extract_features(list(positive_groups)[0]) if positive_groups else {}
