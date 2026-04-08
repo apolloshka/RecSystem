@@ -13,7 +13,7 @@ from src.db.clickhouse_client import (
     insert_user_similarity
 )
 
-print("=== UPDATED VERSION: softer filtered user-based ===")
+print("user-based")
 
 load_dotenv()
 
@@ -22,11 +22,12 @@ V = os.getenv("VK_API_VERSION", "5.131")
 API_URL = "https://api.vk.com/method/"
 
 MIN_GROUP_SIZE = 10
-MAX_GROUP_POPULARITY = 10000000
+MAX_GROUP_POPULARITY = 1000000
 MIN_SIMILARITY = 0.02
 MIN_COMMON_GROUPS = 1
 TOP_K_USERS = 100
-TOP_N = 30
+TOP_N = 1000                 # сколько рекомендаций сохранять в БД
+TOP_N_DISPLAY = 20           # сколько рекомендаций показывать в терминале
 
 
 def vk_call(method, params=None):
@@ -46,17 +47,30 @@ def vk_call(method, params=None):
     return data["response"]
 
 
-def get_group_names(group_ids):
+def get_group_names_batch(group_ids):
+    """Получить названия групп батчами по 500 для ускорения"""
     group_names = {}
-
-    for gid in group_ids:
-        response = vk_call("groups.getById", {"group_id": gid})
-
-        if response:
-            group_names[str(gid)] = response[0]["name"]
+    batch_size = 500
+    
+    # Преобразуем в список строк
+    group_ids_list = [str(gid) for gid in group_ids]
+    
+    for i in range(0, len(group_ids_list), batch_size):
+        batch = group_ids_list[i:i+batch_size]
+        batch_str = ",".join(batch)
+        
+        response = vk_call("groups.getById", {"group_ids": batch_str})
+        
+        if response and isinstance(response, list):
+            for group in response:
+                if "id" in group and "name" in group:
+                    group_names[str(group["id"])] = group["name"]
         else:
-            group_names[str(gid)] = "unknown"
-
+            # Если запрос не удался, помечаем все группы в батче как unknown
+            for gid in batch:
+                if gid not in group_names:
+                    group_names[gid] = "unknown"
+    
     return group_names
 
 
@@ -138,6 +152,7 @@ for uid, sim, groups_set, common_groups in top_users:
 
 if user_similarity_data:
     insert_user_similarity(user_similarity_data)
+    print(f"Saved {len(user_similarity_data)} similar users to database")
 
 scores = defaultdict(float)
 
@@ -166,32 +181,54 @@ recommendations = sorted(
     reverse=True
 )
 
-candidate_recommendations = recommendations[:TOP_N * 5]
-group_names = get_group_names([g for g, _ in candidate_recommendations])
+# Все рекомендации для сохранения в БД (1000 штук)
+all_recommendations = recommendations[:TOP_N]
 
-filtered_recommendations = []
-for g, score in candidate_recommendations:
-    name = group_names.get(str(g), "unknown")
-    if name == "unknown":
-        continue
-    filtered_recommendations.append((g, score, name))
+print(f"\nPrepared {len(all_recommendations)} recommendations for database")
 
-top_recommendations = filtered_recommendations[:TOP_N]
-
-print("\nTop user-based recommendations:\n")
-for g, score, name in top_recommendations:
-    print(f"{g} | {name} | {round(score, 6)}")
-
-with open("user_based_recommendations.txt", "w", encoding="utf-8") as f:
-    f.write("Top user-based recommendations\n\n")
-    for g, score, name in top_recommendations:
-        f.write(f"{g}\t{name}\t{score}\n")
-
-print(f"✓ Saved {len(top_recommendations)} recommendations to user_based_recommendations.txt")
+# -------- сохраняем в ClickHouse (только ID, без названий) --------
 
 user_based_data = []
-for group_id, score, group_name in top_recommendations:
-    user_based_data.append((int(group_id), group_name, float(score)))
+for group_id, score in all_recommendations:
+    # В БД сохраняем без названия (или с пустой строкой)
+    user_based_data.append((int(group_id), "", float(score)))
 
 if user_based_data:
     insert_user_based_recommendations(user_based_data)
+    print(f"Saved {len(user_based_data)} user-based recommendations to ClickHouse database")
+else:
+    print("No user-based recommendations to insert")
+
+# -------- получаем названия ТОЛЬКО для первых TOP_N_DISPLAY групп --------
+
+# Берем ID первых 20 групп для отображения
+display_group_ids = [g for g, _ in all_recommendations[:TOP_N_DISPLAY]]
+
+if display_group_ids:
+    # Получаем их названия (батчами по 500 - быстро!)
+    print(f"\nFetching names for {len(display_group_ids)} groups from VK API...")
+    group_names_dict = get_group_names_batch(display_group_ids)
+
+    # Формируем список для вывода
+    display_recommendations = []
+    for group_id, score in all_recommendations[:TOP_N_DISPLAY]:
+        name = group_names_dict.get(str(group_id), "unknown")
+        display_recommendations.append((group_id, score, name))
+
+    # -------- выводим в терминал --------
+
+    print(f"\nTop {TOP_N_DISPLAY} user-based recommendations:\n")
+    for g, score, name in display_recommendations:
+        print(f"{g} | {name} | {round(score, 6)}")
+else:
+    print("\nNo recommendations to display")
+
+# -------- сохраняем в файл (только ID, без названий - экономим место) --------
+
+with open("user_based_recommendations.txt", "w", encoding="utf-8") as f:
+    f.write(f"Top {len(all_recommendations)} user-based recommendations (group IDs only)\n\n")
+    f.write("Format: group_id\tscore\n\n")
+    for group_id, score in all_recommendations:
+        f.write(f"{group_id}\t{score}\n")
+
+print(f"\nSaved {len(all_recommendations)} recommendations (IDs only) to user_based_recommendations.txt")
