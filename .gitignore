@@ -1,16 +1,2 @@
-# environment
 .env
 .venv/
-
-# python
-__pycache__/
-*.pyc
-
-# data
-data/raw/
-members.txt
-
-# vscode
-.vscode/
-
-.obsidian
