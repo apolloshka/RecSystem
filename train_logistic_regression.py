@@ -76,7 +76,6 @@ model = LogisticRegression(
     class_weight="balanced"
 )
 
-# кросс-валидация только если данных хватает
 min_class_count = y_train.value_counts().min()
 if min_class_count >= 2:
     n_splits = min(5, min_class_count)
