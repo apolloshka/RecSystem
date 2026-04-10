@@ -176,13 +176,24 @@ def insert_group_similarity(similar_groups):
         client.insert("group_similarity", rows, column_names=["source_group_id", "target_group_id", "similarity", "common_users_count"])
 
 # ML датасет
-def create_ml_dataset_table(feature_names=None):
+def create_ml_dataset_table(feature_names=None, recreate=False):
     client = get_client()
+
     if feature_names is None:
-        feature_names = ["user_group_count", "group_popularity", "log_group_popularity", "avg_jaccard", "similar_users_count"]
-    
-    feature_columns = ",\n                ".join([f"{name} Float64" for name in feature_names])
-    
+        feature_names = [
+            "group_popularity",
+            "log_group_popularity",
+            "user_based_score",
+            "item_based_score",
+        ]
+
+    if recreate:
+        client.command("DROP TABLE IF EXISTS ml_dataset")
+
+    feature_columns = ",\n                ".join(
+        [f"{name} Float64" for name in feature_names]
+    )
+
     create_query = f"""
         CREATE TABLE IF NOT EXISTS ml_dataset (
             user_id UInt64,
@@ -193,14 +204,17 @@ def create_ml_dataset_table(feature_names=None):
         ) ENGINE = MergeTree()
         ORDER BY (user_id, candidate_group_id, created_at)
     """
+
     try:
         client.command(create_query)
     except Exception as e:
         print(f"Error creating ml_dataset table: {e}")
 
+
 def truncate_ml_dataset():
     client = get_client()
     client.command("TRUNCATE TABLE IF EXISTS ml_dataset")
+
 
 def insert_ml_dataset(rows, feature_names):
     client = get_client()
