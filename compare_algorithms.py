@@ -1,15 +1,102 @@
+import os
+import time
+import requests
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from dotenv import load_dotenv
 
-from src.db.clickhouse_client import get_client
+from src.db.clickhouse_client import get_client, get_group_name_from_db, save_group_name
 
 
 TOP_RECS_TO_LOAD = 30
 TOP_RECS_TO_PRINT = 10
 TOP_SIM_TO_PRINT = 10
 SAVE_FULL_DETAILS_TO_FILE = True
+
+load_dotenv()
+
+TOKEN = os.getenv("VK_TOKEN")
+V = os.getenv("VK_API_VERSION", "5.131")
+API_URL = "https://api.vk.com/method/"
+
+
+def vk_call(method, params=None):
+    params = params or {}
+    params["access_token"] = TOKEN
+    params["v"] = V
+
+    try:
+        r = requests.get(API_URL + method, params=params, timeout=30)
+        data = r.json()
+    except Exception:
+        return None
+
+    if "error" in data:
+        return None
+
+    return data["response"]
+
+
+def get_group_names_batch(group_ids):
+    group_names = {}
+
+    missing_ids = []
+    for gid in group_ids:
+        name = get_group_name_from_db(int(gid))
+        if name and str(name).strip():
+            group_names[int(gid)] = name
+        else:
+            missing_ids.append(int(gid))
+
+    batch_size = 500
+    for i in range(0, len(missing_ids), batch_size):
+        batch = missing_ids[i:i + batch_size]
+        batch_str = ",".join(map(str, batch))
+
+        response = vk_call("groups.getById", {"group_ids": batch_str})
+
+        if response and isinstance(response, list):
+            for group in response:
+                if "id" in group and "name" in group:
+                    gid = int(group["id"])
+                    name = group["name"]
+                    group_names[gid] = name
+                    try:
+                        save_group_name(gid, name)
+                    except Exception:
+                        pass
+            time.sleep(0.34)
+        else:
+            for gid in batch:
+                if gid not in group_names:
+                    group_names[gid] = "unknown"
+
+    return group_names
+
+
+def fill_missing_names(df):
+    if df.empty:
+        return df
+
+    df = df.copy()
+
+    def is_missing(x):
+        return pd.isna(x) or str(x).strip() == "" or str(x).strip().lower() == "unknown"
+
+    missing_mask = df["name"].apply(is_missing)
+    if not missing_mask.any():
+        return df
+
+    missing_ids = df.loc[missing_mask, "group"].astype(int).unique().tolist()
+    fetched_names = get_group_names_batch(missing_ids)
+
+    for idx, row in df.loc[missing_mask].iterrows():
+        gid = int(row["group"])
+        df.at[idx, "name"] = fetched_names.get(gid, "unknown")
+
+    return df
 
 
 def load_recommendations_from_clickhouse(limit=30):
@@ -41,6 +128,41 @@ def load_recommendations_from_clickhouse(limit=30):
     item_recs = [(row[0], row[1], row[2]) for row in item_result.result_rows]
 
     return baseline_recs, user_recs, item_recs
+
+
+def load_ml_recommendations_from_file(filename="ml_recommendations.txt", limit=30):
+    if not os.path.exists(filename):
+        return []
+
+    recs = []
+    with open(filename, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    for line in lines:
+        line = line.strip()
+        if not line or "|" not in line:
+            continue
+
+        # ожидаем формат:
+        #  1. 12345 | Group Name | 95.12%
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) != 3:
+            continue
+
+        left, name, prob_str = parts
+
+        try:
+            gid_part = left.split(".")[-1].strip()
+            gid = int(gid_part)
+
+            prob_str = prob_str.replace("%", "").strip()
+            score = float(prob_str) / 100.0
+
+            recs.append((gid, name, score))
+        except Exception:
+            continue
+
+    return recs[:limit]
 
 
 def load_similarity_from_clickhouse(limit_users=100, limit_groups=100):
@@ -122,7 +244,7 @@ def print_short_similarity_stats(title, df, common_col, n=10):
     print(f"  Avg {common_col}: {df[common_col].mean():.4f}")
 
     if len(df) > n:
-        print(f"... полные данные сохранены в comparison_results.txt")
+        print("... полные данные сохранены в comparison_results.txt")
 
 
 def print_intersection_summary(title, set_a, set_b, names_map, max_names=10):
@@ -229,13 +351,12 @@ def save_results_to_file(
     df_baseline,
     df_user,
     df_item,
+    df_ml,
     df_user_sim,
     df_group_sim,
     summary_table,
-    baseline_groups,
-    user_groups,
-    item_groups,
     names_map,
+    algorithm_sets,
     filename="comparison_results.txt"
 ):
     with open(filename, "w", encoding="utf-8") as f:
@@ -254,16 +375,15 @@ def save_results_to_file(
         f.write(df_item.to_string(index=False) if not df_item.empty else "No data")
         f.write("\n\n")
 
+        f.write("ML RECOMMENDATIONS:\n")
+        f.write(df_ml.to_string(index=False) if not df_ml.empty else "No data")
+        f.write("\n\n")
+
         f.write("USER-BASED SIMILARITY ANALYSIS:\n")
         f.write("=" * 80 + "\n")
         if not df_user_sim.empty:
             f.write(df_user_sim.to_string(index=False))
             f.write("\n\n")
-            f.write(f"Max similarity: {df_user_sim['similarity'].max():.4f}\n")
-            f.write(f"Avg similarity: {df_user_sim['similarity'].mean():.4f}\n")
-            f.write(f"Median similarity: {df_user_sim['similarity'].median():.4f}\n")
-            f.write(f"Max common groups: {df_user_sim['common_groups'].max()}\n")
-            f.write(f"Avg common groups: {df_user_sim['common_groups'].mean():.4f}\n\n")
         else:
             f.write("No user similarity data\n\n")
 
@@ -272,33 +392,33 @@ def save_results_to_file(
         if not df_group_sim.empty:
             f.write(df_group_sim.to_string(index=False))
             f.write("\n\n")
-            f.write(f"Max similarity: {df_group_sim['similarity'].max():.4f}\n")
-            f.write(f"Avg similarity: {df_group_sim['similarity'].mean():.4f}\n")
-            f.write(f"Median similarity: {df_group_sim['similarity'].median():.4f}\n")
-            f.write(f"Max common users: {df_group_sim['common_users'].max()}\n")
-            f.write(f"Avg common users: {df_group_sim['common_users'].mean():.4f}\n\n")
         else:
             f.write("No group similarity data\n\n")
 
         f.write("INTERSECTIONS:\n")
         f.write("=" * 80 + "\n")
 
-        for title, a, b in [
-            ("BASELINE vs USER-BASED", baseline_groups, user_groups),
-            ("BASELINE vs ITEM-BASED", baseline_groups, item_groups),
-            ("USER-BASED vs ITEM-BASED", user_groups, item_groups),
-        ]:
-            intersection, overlap = compute_intersection_info(a, b)
-            f.write(f"\n{title}\n")
-            f.write("-" * len(title) + "\n")
-            f.write(f"Common recommendations: {len(intersection)}\n")
-            f.write(f"Overlap (Jaccard): {round(overlap, 4)}\n")
-            if intersection:
-                f.write("Intersecting groups:\n")
-                for gid in sorted(intersection):
-                    f.write(f"  {gid} | {names_map.get(gid, 'unknown')}\n")
-            else:
-                f.write("No intersections\n")
+        keys = list(algorithm_sets.keys())
+        for i in range(len(keys)):
+            for j in range(i + 1, len(keys)):
+                a_name = keys[i]
+                b_name = keys[j]
+                a = algorithm_sets[a_name]
+                b = algorithm_sets[b_name]
+
+                intersection, overlap = compute_intersection_info(a, b)
+                title = f"{a_name} vs {b_name}"
+
+                f.write(f"\n{title}\n")
+                f.write("-" * len(title) + "\n")
+                f.write(f"Common recommendations: {len(intersection)}\n")
+                f.write(f"Overlap (Jaccard): {round(overlap, 4)}\n")
+                if intersection:
+                    f.write("Intersecting groups:\n")
+                    for gid in sorted(intersection):
+                        f.write(f"  {gid} | {names_map.get(gid, 'unknown')}\n")
+                else:
+                    f.write("No intersections\n")
 
         f.write("\n\nSUMMARY TABLE:\n")
         f.write(summary_table.to_string(index=False))
@@ -311,18 +431,28 @@ def main():
         baseline_recs, user_recs, item_recs = load_recommendations_from_clickhouse(limit=TOP_RECS_TO_LOAD)
         print("✓ Loaded recommendations from ClickHouse")
 
+        print("Loading ML recommendations from file...")
+        ml_recs = load_ml_recommendations_from_file(limit=TOP_RECS_TO_LOAD)
+        print(f"✓ Loaded {len(ml_recs)} ML recommendations from ml_recommendations.txt")
+
         print("Loading similarity data from ClickHouse...")
         user_sim, group_sim = load_similarity_from_clickhouse(limit_users=100, limit_groups=100)
         print(f"✓ Loaded {len(user_sim)} similar users and {len(group_sim)} similar group pairs")
 
     except Exception as e:
-        print(f"⚠ Could not load from ClickHouse: {e}")
-        baseline_recs, user_recs, item_recs = [], [], []
+        print(f"⚠ Could not load data: {e}")
+        baseline_recs, user_recs, item_recs, ml_recs = [], [], [], []
         user_sim, group_sim = [], []
 
     df_baseline = pd.DataFrame(baseline_recs, columns=["group", "name", "score"])
     df_user = pd.DataFrame(user_recs, columns=["group", "name", "score"])
     df_item = pd.DataFrame(item_recs, columns=["group", "name", "score"])
+    df_ml = pd.DataFrame(ml_recs, columns=["group", "name", "score"])
+
+    df_baseline = fill_missing_names(df_baseline)
+    df_user = fill_missing_names(df_user)
+    df_item = fill_missing_names(df_item)
+    df_ml = fill_missing_names(df_ml)
 
     df_user_sim = pd.DataFrame(user_sim, columns=["user_id", "similarity", "common_groups"])
     if not df_user_sim.empty:
@@ -333,11 +463,12 @@ def main():
         columns=["source_group_id", "target_group_id", "similarity", "common_users"]
     )
 
-    names_map = build_name_map(df_baseline, df_user, df_item)
+    names_map = build_name_map(df_baseline, df_user, df_item, df_ml)
 
     print_short_table("BASELINE RECOMMENDATIONS (top preview)", df_baseline, TOP_RECS_TO_PRINT)
     print_short_table("USER-BASED RECOMMENDATIONS (top preview)", df_user, TOP_RECS_TO_PRINT)
     print_short_table("ITEM-BASED RECOMMENDATIONS (top preview)", df_item, TOP_RECS_TO_PRINT)
+    print_short_table("ML RECOMMENDATIONS (top preview)", df_ml, TOP_RECS_TO_PRINT)
 
     print_short_similarity_stats(
         "USER-BASED SIMILARITY",
@@ -353,79 +484,75 @@ def main():
         n=TOP_SIM_TO_PRINT
     )
 
-    if not df_baseline.empty and not df_user.empty and not df_item.empty:
-        baseline_groups = set(df_baseline["group"])
-        user_groups = set(df_user["group"])
-        item_groups = set(df_item["group"])
+    algorithm_dfs = {
+        "baseline": df_baseline,
+        "user_based": df_user,
+        "item_based": df_item,
+        "ml": df_ml,
+    }
 
-        print("\n" + "=" * 60)
-        print("COMPARISON OF ALGORITHMS")
-        print("=" * 60)
+    algorithm_sets = {
+        name: set(df["group"]) if not df.empty else set()
+        for name, df in algorithm_dfs.items()
+    }
 
-        print_intersection_summary(
-            "BASELINE vs USER-BASED",
-            baseline_groups,
-            user_groups,
-            names_map,
-            max_names=10
-        )
+    print("\n" + "=" * 60)
+    print("COMPARISON OF ALGORITHMS")
+    print("=" * 60)
 
-        print_intersection_summary(
-            "BASELINE vs ITEM-BASED",
-            baseline_groups,
-            item_groups,
-            names_map,
-            max_names=10
-        )
-
-        print_intersection_summary(
-            "USER-BASED vs ITEM-BASED",
-            user_groups,
-            item_groups,
-            names_map,
-            max_names=10
-        )
-
-        summary_table = pd.DataFrame({
-            "algorithm": ["baseline", "user_based", "item_based"],
-            "count_recommendations": [
-                len(df_baseline),
-                len(df_user),
-                len(df_item)
-            ],
-            "avg_score": [
-                df_baseline["score"].mean() if len(df_baseline) > 0 else 0,
-                df_user["score"].mean() if len(df_user) > 0 else 0,
-                df_item["score"].mean() if len(df_item) > 0 else 0
-            ],
-            "max_score": [
-                df_baseline["score"].max() if len(df_baseline) > 0 else 0,
-                df_user["score"].max() if len(df_user) > 0 else 0,
-                df_item["score"].max() if len(df_item) > 0 else 0
-            ]
-        })
-
-        print("\n" + "=" * 60)
-        print("SUMMARY TABLE")
-        print("=" * 60)
-        print(summary_table.to_string(index=False))
-
-        if SAVE_FULL_DETAILS_TO_FILE:
-            save_results_to_file(
-                df_baseline,
-                df_user,
-                df_item,
-                df_user_sim,
-                df_group_sim,
-                summary_table,
-                baseline_groups,
-                user_groups,
-                item_groups,
+    keys = list(algorithm_sets.keys())
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            a_name = keys[i]
+            b_name = keys[j]
+            print_intersection_summary(
+                f"{a_name.upper()} vs {b_name.upper()}",
+                algorithm_sets[a_name],
+                algorithm_sets[b_name],
                 names_map,
+                max_names=10
             )
-            print("\n✓ Full comparison results saved to comparison_results.txt")
-    else:
-        print("\n⚠ Not enough recommendation data for full comparison")
+
+    summary_table = pd.DataFrame({
+        "algorithm": ["baseline", "user_based", "item_based", "ml"],
+        "count_recommendations": [
+            len(df_baseline),
+            len(df_user),
+            len(df_item),
+            len(df_ml),
+        ],
+        "avg_score": [
+            df_baseline["score"].mean() if len(df_baseline) > 0 else 0,
+            df_user["score"].mean() if len(df_user) > 0 else 0,
+            df_item["score"].mean() if len(df_item) > 0 else 0,
+            df_ml["score"].mean() if len(df_ml) > 0 else 0,
+        ],
+        "max_score": [
+            df_baseline["score"].max() if len(df_baseline) > 0 else 0,
+            df_user["score"].max() if len(df_user) > 0 else 0,
+            df_item["score"].max() if len(df_item) > 0 else 0,
+            df_ml["score"].max() if len(df_ml) > 0 else 0,
+        ]
+    })
+
+    print("\n" + "=" * 60)
+    print("SUMMARY TABLE")
+    print("=" * 60)
+    print(summary_table.to_string(index=False))
+
+    if SAVE_FULL_DETAILS_TO_FILE:
+        save_results_to_file(
+            df_baseline,
+            df_user,
+            df_item,
+            df_ml,
+            df_user_sim,
+            df_group_sim,
+            summary_table,
+            names_map,
+            algorithm_sets,
+        )
+        print("\n✓ Full comparison results saved to comparison_results.txt")
 
     print("\n" + "=" * 60)
     print("PLOTTING USER-BASED AND ITEM-BASED SIMILARITY")
