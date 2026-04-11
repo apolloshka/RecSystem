@@ -117,7 +117,7 @@ joblib.dump(model, "recommendation_model.pkl")
 joblib.dump(scaler, "feature_scaler.pkl")
 joblib.dump(feature_names, "feature_names.pkl")
 
-print("\n✅ Model, scaler and feature_names saved successfully.")
+print("\n Model, scaler and feature_names saved successfully.")
 
 coefficients = model.coef_[0]
 importance_df = pd.DataFrame({

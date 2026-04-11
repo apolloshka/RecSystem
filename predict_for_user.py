@@ -201,7 +201,7 @@ for gid, prob in preds[:30]:
     top_30.append((gid, name, prob))
 
 print("\n" + "=" * 70)
-print("🎯 TOP-30 RECOMMENDATIONS (ML Model)")
+print("TOP-30 RECOMMENDATIONS (ML Model)")
 print("=" * 70)
 for i, (gid, name, prob) in enumerate(top_30, 1):
     print(f"{i:2d}. {gid:10d} | {name[:45]:45} | {prob:.2%}")
@@ -212,4 +212,4 @@ with open("ml_recommendations.txt", "w", encoding="utf-8") as f:
     for i, (gid, name, prob) in enumerate(top_30, 1):
         f.write(f"{i:2d}. {gid} | {name} | {prob:.2%}\n")
 
-print("\n✅ Saved to ml_recommendations.txt")
+print("\n Saved to ml_recommendations.txt")

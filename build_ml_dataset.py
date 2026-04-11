@@ -214,4 +214,4 @@ t0 = time.time()
 insert_ml_dataset(dataset_rows, feature_names)
 print(f"[INFO] Inserted in {time.time() - t0:.2f} sec")
 
-print("✅ ML dataset saved successfully.")
+print("ML dataset saved successfully.")
