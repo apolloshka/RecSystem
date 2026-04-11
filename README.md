@@ -55,7 +55,8 @@ docker exec -it airflow_webserver bash -c "cd /opt/airflow/project && python tra
 ### 10. predict_for_user
 docker exec -it airflow_webserver bash -c "cd /opt/airflow/project && python predict_for_user.py"
 
-
+### 11. просмотр БД
+docker exec -it vk_clickhouse clickhouse-client --user vk_user --password vk_password --database vk_diploma
 
 ### DAG (Directed Acyclic Graph) — это автоматизированный пайплайн, который запускает все твои скрипты в правильном порядке без ручного вмешательства.
 
