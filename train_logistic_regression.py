@@ -117,6 +117,50 @@ print(f"Test F1-Score: {test_f1:.4f}")
 print("\nClassification Report:")
 print(classification_report(y_test, y_pred, target_names=["Negative", "Positive"], zero_division=0))
 
+def hit_rate_at_k_per_user(user_preds, k=5):
+    sorted_preds = sorted(user_preds, key=lambda x: x[1], reverse=True)
+    top_k = sorted_preds[:k]
+    return 1 if any(label == 1 for label, _ in top_k) else 0
+
+def ndcg_at_k_per_user(user_preds, k=5):
+
+    sorted_preds = sorted(user_preds, key=lambda x: x[1], reverse=True)
+    top_k = sorted_preds[:k]
+    
+    dcg = 0.0
+    for i, (label, _) in enumerate(top_k):
+        if label == 1:
+            dcg += 1.0 / np.log2(i + 2)
+    
+    total_positives = sum(1 for label, _ in user_preds if label == 1)
+    idcg = 0.0
+    for i in range(min(k, total_positives)):
+        idcg += 1.0 / np.log2(i + 2)
+    
+    return dcg / idcg if idcg > 0 else 0.0
+
+test_indices = X_test.index
+
+user_test = df.loc[test_indices, "user_id"].values
+
+test_df = pd.DataFrame({
+    'user_id': user_test,
+    'y_true': y_test.values if hasattr(y_test, 'values') else y_test,
+    'y_pred_proba': y_pred_proba
+})
+
+print("\n--- Ranking metrics (HitRate & NDCG per user, averaged) ---")
+for k in [1, 3, 5, 10]:
+    hit_rates = []
+    ndcgs = []
+    
+    for user_id, group in test_df.groupby('user_id'):
+        user_preds = list(zip(group['y_true'], group['y_pred_proba']))
+        hit_rates.append(hit_rate_at_k_per_user(user_preds, k=k))
+        ndcgs.append(ndcg_at_k_per_user(user_preds, k=k))
+    
+    print(f"HitRate@{k}: {np.mean(hit_rates):.4f}, NDCG@{k}: {np.mean(ndcgs):.4f}")
+
 joblib.dump(model, "recommendation_model.pkl")
 joblib.dump(scaler, "feature_scaler.pkl")
 joblib.dump(feature_names, "feature_names.pkl")
