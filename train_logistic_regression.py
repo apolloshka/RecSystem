@@ -22,12 +22,12 @@ client = get_client()
 feature_names = [
     "group_popularity",
     "log_group_popularity",
-    "user_based_score",
-    "item_based_score",
+   # "user_based_score",
+   # "item_based_score",
     "max_group_similarity",
     "sum_group_similarity",
     "common_members_with_profile",
-    "is_in_both_recs",
+   # "is_in_both_recs",
 ]
 
 columns = ["user_id", "candidate_group_id", "label"] + feature_names + ["created_at"]
@@ -48,8 +48,8 @@ df = pd.DataFrame(result.result_rows, columns=columns)
 if df.empty:
     raise ValueError("ml_dataset is empty. Run build_ml_dataset.py first.")
 
-X = df[feature_names]
-y = df["label"]
+X = df[feature_names] # колонки признаков
+y = df["label"] # колонки меток
 
 print(f"Dataset: {len(df)} rows, {X.shape[1]} features")
 print(f"Positive: {(y == 1).sum()}, Negative: {(y == 0).sum()}")
@@ -62,7 +62,7 @@ X_train, X_test, y_train, y_test = train_test_split(
     y,
     test_size=0.2,
     random_state=42,
-    stratify=y
+    stratify=y 
 )
 
 scaler = StandardScaler()
@@ -70,12 +70,13 @@ X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
 model = LogisticRegression(
-    C=0.1,
+    C=0.01, # регуляризация
     max_iter=2000,
     random_state=42,
     class_weight="balanced"
 )
 
+# кросс-валидация
 min_class_count = y_train.value_counts().min()
 if min_class_count >= 2:
     n_splits = min(5, min_class_count)
@@ -94,10 +95,13 @@ if min_class_count >= 2:
 else:
     print("\n--- Cross-validation skipped: too few examples per class ---")
 
+# обучение финальной модели
+# p = 1 / (1 + e^-(w₁x₁ + w₂x₂ + ... + w₈x₈ + b)) - вероятность 
+# w_new = w_old + learning_rate * error * x * p * (1-p) - изменение веса если модель ошиблась
 model.fit(X_train_scaled, y_train)
 
-y_pred_proba = model.predict_proba(X_test_scaled)[:, 1]
-y_pred = model.predict(X_test_scaled)
+y_pred_proba = model.predict_proba(X_test_scaled)[:, 1] # вероятности
+y_pred = model.predict(X_test_scaled) # классы
 
 test_auc = roc_auc_score(y_test, y_pred_proba)
 test_f1 = f1_score(y_test, y_pred, zero_division=0)

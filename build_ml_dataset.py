@@ -21,14 +21,14 @@ from src.recommenders.common import (
 
 print("=== Building ML Dataset for many users ===")
 
-RANDOM_SEED = 42
+RANDOM_SEED = 42 # Фиксируем случайность для воспроизводимости
 random.seed(RANDOM_SEED)
 
 # -----------------------------
 # Параметры
 # -----------------------------
 MIN_USER_GROUPS = 5
-MAX_USERS_FOR_DATASET = 50
+MAX_USERS_FOR_DATASET = 100
 MAX_POSITIVES_PER_USER = 3
 NEGATIVES_PER_POSITIVE = 4
 
@@ -49,14 +49,14 @@ MAX_ITEM_CANDIDATES = 3000
 ENABLE_ITEM_BASED = True
 
 feature_names = [
-    "group_popularity",
-    "log_group_popularity",
-    "user_based_score",
-    "item_based_score",
-    "max_group_similarity",
-    "sum_group_similarity",
-    "common_members_with_profile",
-    "is_in_both_recs",
+    "group_popularity",            # Популярность группы
+    "log_group_popularity",        # Логарифм популярности (сглаженная оценка популярности)
+    "user_based_score",            # Оценка от user-based алгоритма
+    "item_based_score",            # Оценка от item-based алгоритма
+    "max_group_similarity",        # Максимальная похожесть с группами профиля (Мера Жаккара между кандидатом и группой из профиля)
+    "sum_group_similarity",        # Суммарная похожесть с группами профиля (Мера Жаккара между кандидатом и ВСЕМИ группами из профиля)
+    "common_members_with_profile", # Общие участники с профилем
+    "is_in_both_recs",             # Флаг (есть в обеих рекомендациях)
 ]
 
 print("[INFO] Connecting to ClickHouse...")
@@ -69,15 +69,16 @@ print(f"[INFO] user_groups loaded in {time.time() - t0:.2f} sec")
 
 print("[INFO] Building maps...")
 t0 = time.time()
-user_to_groups = build_user_to_groups(rows)
-group_to_users = build_group_to_users(user_to_groups)
-group_popularity = build_group_popularity(group_to_users)
+user_to_groups = build_user_to_groups(rows) # user → {group1, group2, ...}
+group_to_users = build_group_to_users(user_to_groups) # group → {user1, user2, ...}
+group_popularity = build_group_popularity(group_to_users) # group → количество участников
 all_group_ids = list(group_to_users.keys())
 print(f"[INFO] maps built in {time.time() - t0:.2f} sec")
 
 print(f"[INFO] Users loaded: {len(user_to_groups)}")
 print(f"[INFO] Groups loaded: {len(group_to_users)}")
 
+# отбираем пользователей
 eligible_users = [
     user_id for user_id, groups in user_to_groups.items()
     if len(groups) >= MIN_USER_GROUPS
@@ -99,6 +100,7 @@ for idx, user_id in enumerate(eligible_users, 1):
 
     print(f"\n[USER {idx}/{len(eligible_users)}] user_id={user_id} real_groups={len(real_groups)}")
 
+    # отбираем группы пользователя, позитив
     targets = sample_leave_one_out_targets(
         real_groups=real_groups,
         max_positives_per_user=MAX_POSITIVES_PER_USER,
@@ -107,6 +109,7 @@ for idx, user_id in enumerate(eligible_users, 1):
 
     print(f"[USER {idx}] positive targets count={len(targets)}")
 
+    # формируем профиль пользователя, удаляя позитив
     for target_group in targets:
         profile_groups = real_groups - {target_group}
 

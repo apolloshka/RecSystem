@@ -214,23 +214,25 @@ def sample_negative_groups(
     all_group_ids: list,
     group_popularity: dict,
     negatives_per_positive: int = 4,
-    hard_ratio: float = 0.5,
+    hard_ratio: float = 0.3,
     min_group_size: int = 3,
-    top_user_based_candidates: int = 100,
-    top_item_based_candidates: int = 100,
+    top_user_based_candidates: int = 50,
+    top_item_based_candidates: int = 50,
 ) -> list:
     hard_needed = max(1, int(round(negatives_per_positive * hard_ratio)))
     random_needed = max(0, negatives_per_positive - hard_needed)
 
+    # формируем пул сложных негатив групп, в которых не состоит пользователь, имеющихся в user-based рекомендациях для этого пользователя
     hard_pool_user = [
         g for g, _ in sorted(user_based_scores.items(), key=lambda x: x[1], reverse=True)
         if g not in real_groups
-    ][:top_user_based_candidates]
+    ][-top_user_based_candidates:]
 
+    # формируем пул сложных негатив групп, в которых не состоит пользователь, имеющихся в item-based рекомендациях для этого пользователя
     hard_pool_item = [
         g for g, _ in sorted(item_based_scores.items(), key=lambda x: x[1], reverse=True)
         if g not in real_groups
-    ][:top_item_based_candidates]
+    ][-top_item_based_candidates:]
 
     hard_pool = list(set(hard_pool_user) | set(hard_pool_item))
 
@@ -239,6 +241,7 @@ def sample_negative_groups(
     if hard_pool:
         selected.extend(random.sample(hard_pool, min(hard_needed, len(hard_pool))))
 
+    # формируем пул негатив групп, в которых не состоит пользователь, имеющихся в user_groups 
     random_pool = [
         g for g in all_group_ids
         if g not in real_groups

@@ -19,9 +19,6 @@ print("=== ML Predictor for my_groups ===")
 
 client = get_client()
 
-# -----------------------------
-# Параметры
-# -----------------------------
 TOP_K_SIMILAR_USERS = 50
 MIN_GROUP_SIZE = 3
 MIN_USER_SIMILARITY = 0.01
@@ -40,18 +37,12 @@ TOP_CANDIDATES_FROM_ITEM_BASED = 1000
 TOP_CANDIDATES_FROM_BASELINE = 1000
 TOP_CANDIDATES_RANDOM = 1000
 
-# -----------------------------
-# 1. Загружаем модель
-# -----------------------------
 model = joblib.load("recommendation_model.pkl")
 scaler = joblib.load("feature_scaler.pkl")
 feature_names = joblib.load("feature_names.pkl")
 
 print(f"Loaded feature_names: {feature_names}")
 
-# -----------------------------
-# 2. Загружаем данные
-# -----------------------------
 my_groups = {int(row[0]) for row in client.query("SELECT group_id FROM my_groups").result_rows}
 print(f"My groups: {len(my_groups)}")
 
@@ -64,9 +55,6 @@ all_group_ids = list(group_to_users.keys())
 print(f"Loaded users: {len(user_to_groups)}")
 print(f"Loaded groups: {len(group_to_users)}")
 
-# -----------------------------
-# 3. Считаем CF scores для твоего профиля
-# -----------------------------
 print("Computing user-based scores for my_groups...")
 t0 = time.time()
 user_based_scores = get_user_based_scores_for_profile(
@@ -101,9 +89,6 @@ else:
 profile_members = build_profile_members(my_groups, group_to_users)
 print(f"profile_members: {len(profile_members)}")
 
-# -----------------------------
-# 4. Расширенный candidate pool
-# -----------------------------
 baseline_candidates = [
     gid for gid, pop in sorted(group_popularity.items(), key=lambda x: x[1], reverse=True)
     if gid not in my_groups and pop >= MIN_GROUP_SIZE
@@ -130,9 +115,6 @@ candidates = candidates - my_groups
 
 print(f"Candidates for prediction: {len(candidates)}")
 
-# -----------------------------
-# 5. Имя группы
-# -----------------------------
 def get_group_name_safe(group_id: int) -> str:
     name = get_group_name_from_db(group_id)
     if name:
@@ -167,9 +149,6 @@ def get_group_name_safe(group_id: int) -> str:
 
     return "unknown"
 
-# -----------------------------
-# 6. Предсказание
-# -----------------------------
 def predict(group_id: int) -> float:
     feature_dict = extract_feature_dict_for_profile_candidate(
         profile_groups=my_groups,
