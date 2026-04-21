@@ -10,11 +10,13 @@ TOKEN = os.getenv("VK_TOKEN")
 V = os.getenv("VK_API_VERSION", "5.131")
 API_URL = "https://api.vk.com/method/"
 
-USERS_PER_GROUP = 350    # сколько брать из каждой группы
-SLEEP_SECONDS = 1.5      # задержка между запросами
+USERS_PER_GROUP = 350          # сколько брать из каждой группы
+BATCH_SIZE = 20               # сколько пользователей в одном execute запросе
+SLEEP_BETWEEN_BATCHES = 2.0    # задержка между батчами
 
 
 def vk_call(method, params=None, retry=3):
+    """Обычный вызов VK API"""
     params = params or {}
     params["access_token"] = TOKEN
     params["v"] = V
@@ -26,14 +28,14 @@ def vk_call(method, params=None, retry=3):
         except Exception as e:
             print(f"Request error: {e}")
             if attempt < retry - 1:
-                time.sleep(SLEEP_SECONDS * 2)
+                time.sleep(10)
             continue
 
         if "error" in data:
             error_code = data["error"].get("error_code")
             if error_code in (6, 9):  # Rate limit or Flood control
-                wait_time = SLEEP_SECONDS * (attempt + 1) * 2
-                print(f"  Rate limit (error {error_code}), waiting {wait_time:.1f}s...")
+                wait_time = 30 * (attempt + 1)
+                print(f"  Rate limit (error {error_code}), waiting {wait_time}s...")
                 time.sleep(wait_time)
                 continue
             else:
@@ -42,13 +44,38 @@ def vk_call(method, params=None, retry=3):
 
         return data["response"]
 
-    print(f"  Failed after {retry} attempts")
     return None
 
 
+def execute_batch(user_ids):
+    """
+    Выполняет groups.get для нескольких пользователей за один запрос
+    user_ids: список ID пользователей (до 25)
+    """
+    # Формируем код для execute
+    code = "var result = [];"
+    for i, uid in enumerate(user_ids):
+        code += f"""
+        var item{i} = API.groups.get({{
+            "user_id": {uid},
+            "count": 1000
+        }});
+        result.push({{
+            "user_id": {uid},
+            "groups": item{i}.items
+        }});
+        """
+    code += "return result;"
+    
+    response = vk_call("execute", {"code": code})
+    return response
+
+
 def load_balanced_users_from_clickhouse(users_per_group: int):
+    """Загружает сбалансированную выборку пользователей из group_members"""
     client = get_client()
 
+    # Статистика по группам (для вывода)
     stats_result = client.query(f"""
         SELECT source_group_id, count() AS cnt
         FROM
@@ -66,9 +93,10 @@ def load_balanced_users_from_clickhouse(users_per_group: int):
         GROUP BY source_group_id
         ORDER BY source_group_id
     """)
-
+    
     per_group_stats = [(row[0], row[1]) for row in stats_result.result_rows]
 
+    # Уникальные пользователи
     members_result = client.query(f"""
         SELECT DISTINCT member_id
         FROM
@@ -99,37 +127,60 @@ def main():
 
     print(f"\nUnique users loaded for processing: {len(users)}")
 
+    # Разбиваем пользователей на батчи
+    batches = [users[i:i + BATCH_SIZE] for i in range(0, len(users), BATCH_SIZE)]
+    print(f"Batches: {len(batches)} (batch size = {BATCH_SIZE})")
+
     user_groups = {}
     ok = 0
     fail = 0
 
-    for i, uid in enumerate(users, start=1):
-        response = vk_call("groups.get", {
-            "user_id": uid,
-            "count": 1000
-        })
-
+    for batch_idx, batch in enumerate(batches, 1):
+        print(f"\nProcessing batch {batch_idx}/{len(batches)}...")
+        
+        response = execute_batch(batch)
+        
         if response is None:
-            fail += 1
-        else:
-            groups = response.get("items", [])
-            user_groups[uid] = groups
-            ok += 1
-
-        if i % 50 == 0 or i == len(users):
-            print(f"processed {i}/{len(users)} | ok={ok} fail={fail}")
-
-        # Сохраняем промежуточные результаты каждые 100 пользователей
-        if i % 100 == 0 and user_groups:
+            print(f"  Batch {batch_idx} failed completely")
+            fail += len(batch)
+            continue
+        
+        batch_ok = 0
+        batch_fail = 0
+        
+        for item in response:
+            uid = str(item["user_id"])
+            groups = item.get("groups")
+            
+            # Защита от None и не-списков
+            if groups is None or not isinstance(groups, list):
+                groups = []
+            
+            if groups:
+                user_groups[uid] = groups
+                batch_ok += 1
+            else:
+                batch_fail += 1
+        
+        ok += batch_ok
+        fail += batch_fail
+        
+        print(f"  Batch {batch_idx}: ok={batch_ok}, fail={batch_fail}")
+        print(f"  Total so far: ok={ok}, fail={fail}")
+        
+        # Сохраняем промежуточные результаты каждые 10 батчей
+        if batch_idx % 10 == 0 and user_groups:
             truncate_user_groups()
             insert_user_groups(user_groups)
             print(f"  [Checkpoint] Saved {len(user_groups)} users so far")
-
-        time.sleep(SLEEP_SECONDS)
+        
+        # Задержка между батчами
+        if batch_idx < len(batches):
+            time.sleep(SLEEP_BETWEEN_BATCHES)
 
     print("\nCollection finished")
-    print("Users with data:", ok)
-    print("Users failed:", fail)
+    print(f"Users with data: {ok}")
+    print(f"Users failed: {fail}")
 
     if user_groups:
         truncate_user_groups()

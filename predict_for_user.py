@@ -1,8 +1,11 @@
-import time
-import math
+import os
 import random
+import time
+
 import joblib
 import pandas as pd
+import requests
+from dotenv import load_dotenv
 
 from src.db.clickhouse_client import get_client, get_group_name_from_db, save_group_name
 from src.recommenders.common import (
@@ -16,6 +19,10 @@ from src.recommenders.common import (
 )
 
 print("=== ML Predictor for my_groups ===")
+
+load_dotenv()
+VK_TOKEN = os.getenv("VK_TOKEN")
+VK_API_VERSION = os.getenv("VK_API_VERSION", "5.131")
 
 client = get_client()
 
@@ -37,16 +44,26 @@ TOP_CANDIDATES_FROM_ITEM_BASED = 1000
 TOP_CANDIDATES_FROM_BASELINE = 1000
 TOP_CANDIDATES_RANDOM = 1000
 
+train_users = joblib.load("train_users.pkl")  # после загрузки модели
 model = joblib.load("recommendation_model.pkl")
 scaler = joblib.load("feature_scaler.pkl")
 feature_names = joblib.load("feature_names.pkl")
+
 
 print(f"Loaded feature_names: {feature_names}")
 
 my_groups = {int(row[0]) for row in client.query("SELECT group_id FROM my_groups").result_rows}
 print(f"My groups: {len(my_groups)}")
 
-rows = client.query("SELECT user_id, group_id FROM user_groups").result_rows
+train_users_str = ','.join(map(str, train_users))
+
+rows = client.query(f"""
+    SELECT user_id, group_id FROM user_groups 
+    WHERE user_id IN ({train_users_str})
+""").result_rows
+
+print(f"[INFO] Loaded {len(rows)} rows for train users only")
+
 user_to_groups = build_user_to_groups(rows)
 group_to_users = build_group_to_users(user_to_groups)
 group_popularity = build_group_popularity(group_to_users)
@@ -66,6 +83,7 @@ user_based_scores = get_user_based_scores_for_profile(
     min_similarity=MIN_USER_SIMILARITY,
     min_common_groups=MIN_COMMON_GROUPS,
     max_group_popularity=MAX_GROUP_POPULARITY,
+    target_user_id=None,
 )
 print(f"user-based candidates: {len(user_based_scores)} in {time.time() - t0:.2f} sec")
 
@@ -80,27 +98,35 @@ if ENABLE_ITEM_BASED:
         min_item_similarity=MIN_ITEM_SIMILARITY,
         min_item_support=MIN_ITEM_SUPPORT,
         max_item_candidates=MAX_ITEM_CANDIDATES,
+        target_user_id=None,
     )
     print(f"item-based candidates: {len(item_based_scores)} in {time.time() - t0:.2f} sec")
 else:
     item_based_scores = {}
     print("item-based disabled")
 
-profile_members = build_profile_members(my_groups, group_to_users)
+profile_members = build_profile_members(
+    profile_groups=my_groups,
+    group_to_users=group_to_users,
+    target_user_id=None,
+)
 print(f"profile_members: {len(profile_members)}")
 
 baseline_candidates = [
-    gid for gid, pop in sorted(group_popularity.items(), key=lambda x: x[1], reverse=True)
+    gid
+    for gid, pop in sorted(group_popularity.items(), key=lambda x: x[1], reverse=True)
     if gid not in my_groups and pop >= MIN_GROUP_SIZE
 ][:TOP_CANDIDATES_FROM_BASELINE]
 
 user_based_candidates = [
-    gid for gid, _ in sorted(user_based_scores.items(), key=lambda x: x[1], reverse=True)
+    gid
+    for gid, _ in sorted(user_based_scores.items(), key=lambda x: x[1], reverse=True)
     if gid not in my_groups
 ][:TOP_CANDIDATES_FROM_USER_BASED]
 
 item_based_candidates = [
-    gid for gid, _ in sorted(item_based_scores.items(), key=lambda x: x[1], reverse=True)
+    gid
+    for gid, _ in sorted(item_based_scores.items(), key=lambda x: x[1], reverse=True)
     if gid not in my_groups
 ][:TOP_CANDIDATES_FROM_ITEM_BASED]
 
@@ -115,39 +141,55 @@ candidates = candidates - my_groups
 
 print(f"Candidates for prediction: {len(candidates)}")
 
+
+def get_group_names_batch(group_ids: list[int]) -> dict[str, str]:
+    if not group_ids:
+        return {}
+
+    result = {}
+    chunk_size = 500
+
+    for i in range(0, len(group_ids), chunk_size):
+        chunk = group_ids[i:i + chunk_size]
+        chunk_str = ",".join(map(str, chunk))
+
+        try:
+            url = "https://api.vk.com/method/groups.getById"
+            params = {
+                "group_ids": chunk_str,
+                "access_token": VK_TOKEN,
+                "v": VK_API_VERSION,
+            }
+
+            response = requests.get(url, params=params, timeout=30)
+            data = response.json()
+
+            if "response" in data:
+                for group in data["response"]:
+                    gid = str(group["id"])
+                    name = group["name"]
+                    result[gid] = name
+                    save_group_name(gid, name)
+            else:
+                print(f"  Error: {data.get('error', 'Unknown error')}")
+
+        except Exception as e:
+            print(f"  Exception: {e}")
+
+        if i + chunk_size < len(group_ids):
+            time.sleep(0.34)
+
+    return result
+
+
 def get_group_name_safe(group_id: int) -> str:
     name = get_group_name_from_db(group_id)
     if name:
         return name
 
-    try:
-        import requests
-        import os
-        from dotenv import load_dotenv
+    names = get_group_names_batch([group_id])
+    return names.get(str(group_id), "unknown")
 
-        load_dotenv()
-        token = os.getenv("VK_TOKEN")
-        version = os.getenv("VK_API_VERSION", "5.131")
-
-        url = "https://api.vk.com/method/groups.getById"
-        params = {
-            "group_id": group_id,
-            "access_token": token,
-            "v": version,
-        }
-
-        response = requests.get(url, params=params, timeout=10)
-        data = response.json()
-
-        if "response" in data and data["response"]:
-            name = data["response"][0]["name"]
-            save_group_name(group_id, name)
-            time.sleep(0.34)
-            return name
-    except Exception:
-        pass
-
-    return "unknown"
 
 def predict(group_id: int) -> float:
     feature_dict = extract_feature_dict_for_profile_candidate(
@@ -157,11 +199,13 @@ def predict(group_id: int) -> float:
         item_based_scores=item_based_scores,
         group_to_users=group_to_users,
         profile_members=profile_members,
+        target_user_id=None,
     )
     feature_dict = {f: feature_dict.get(f, 0.0) for f in feature_names}
     features_df = pd.DataFrame([feature_dict], columns=feature_names)
     features_scaled = scaler.transform(features_df)
     return float(model.predict_proba(features_scaled)[0][1])
+
 
 print("Predicting...")
 preds = [(gid, predict(gid)) for gid in candidates]
@@ -171,7 +215,7 @@ all_probs = [p for _, p in preds]
 if all_probs:
     print(f"Min prob: {min(all_probs):.6f}")
     print(f"Max prob: {max(all_probs):.6f}")
-    print(f"Mean prob: {sum(all_probs)/len(all_probs):.6f}")
+    print(f"Mean prob: {sum(all_probs) / len(all_probs):.6f}")
 
 print("Fetching names for top-30...")
 top_30 = []
@@ -191,4 +235,4 @@ with open("ml_recommendations.txt", "w", encoding="utf-8") as f:
     for i, (gid, name, prob) in enumerate(top_30, 1):
         f.write(f"{i:2d}. {gid} | {name} | {prob:.2%}\n")
 
-print("\n Saved to ml_recommendations.txt")
+print("\nSaved to ml_recommendations.txt")

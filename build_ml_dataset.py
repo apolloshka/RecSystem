@@ -1,5 +1,8 @@
 import random
 import time
+import joblib
+
+from sklearn.model_selection import train_test_split
 
 from src.db.clickhouse_client import (
     get_client,
@@ -19,16 +22,14 @@ from src.recommenders.common import (
     sample_negative_groups,
 )
 
-print("=== Building ML Dataset for many users ===")
+print("=== Building ML Dataset for train users only ===")
 
-RANDOM_SEED = 42 # Фиксируем случайность для воспроизводимости
+RANDOM_SEED = 42
 random.seed(RANDOM_SEED)
 
-# -----------------------------
-# Параметры
-# -----------------------------
 MIN_USER_GROUPS = 5
-MAX_USERS_FOR_DATASET = 100
+MAX_USERS_FOR_DATASET = 500
+
 MAX_POSITIVES_PER_USER = 3
 NEGATIVES_PER_POSITIVE = 4
 
@@ -49,14 +50,14 @@ MAX_ITEM_CANDIDATES = 3000
 ENABLE_ITEM_BASED = True
 
 feature_names = [
-    "group_popularity",            # Популярность группы
-    "log_group_popularity",        # Логарифм популярности (сглаженная оценка популярности)
-    "user_based_score",            # Оценка от user-based алгоритма
-    "item_based_score",            # Оценка от item-based алгоритма
-    "max_group_similarity",        # Максимальная похожесть с группами профиля (Мера Жаккара между кандидатом и группой из профиля)
-    "sum_group_similarity",        # Суммарная похожесть с группами профиля (Мера Жаккара между кандидатом и ВСЕМИ группами из профиля)
-    "common_members_with_profile", # Общие участники с профилем
-    "is_in_both_recs",             # Флаг (есть в обеих рекомендациях)
+    "group_popularity",
+    "log_group_popularity",
+    "user_based_score",
+    "item_based_score",
+    "max_group_similarity",
+    "sum_group_similarity",
+    "common_members_with_profile",
+    "is_in_both_recs",
 ]
 
 print("[INFO] Connecting to ClickHouse...")
@@ -69,47 +70,72 @@ print(f"[INFO] user_groups loaded in {time.time() - t0:.2f} sec")
 
 print("[INFO] Building maps...")
 t0 = time.time()
-user_to_groups = build_user_to_groups(rows) # user → {group1, group2, ...}
-group_to_users = build_group_to_users(user_to_groups) # group → {user1, user2, ...}
-group_popularity = build_group_popularity(group_to_users) # group → количество участников
+user_to_groups = build_user_to_groups(rows)
+group_to_users = build_group_to_users(user_to_groups)
+group_popularity = build_group_popularity(group_to_users)
 all_group_ids = list(group_to_users.keys())
 print(f"[INFO] maps built in {time.time() - t0:.2f} sec")
 
 print(f"[INFO] Users loaded: {len(user_to_groups)}")
 print(f"[INFO] Groups loaded: {len(group_to_users)}")
 
-# отбираем пользователей
 eligible_users = [
-    user_id for user_id, groups in user_to_groups.items()
+    user_id
+    for user_id, groups in user_to_groups.items()
     if len(groups) >= MIN_USER_GROUPS
 ]
 
 random.shuffle(eligible_users)
 eligible_users = eligible_users[:MAX_USERS_FOR_DATASET]
 
-print(f"[INFO] Eligible users: {len(eligible_users)}")
+print(f"[INFO] Eligible users total: {len(eligible_users)}")
+
+train_users, test_users = train_test_split(
+    eligible_users,
+    test_size=0.2,
+    random_state=RANDOM_SEED,
+    shuffle=True,
+)
+
+# ФИКС: перестраиваем словари ТОЛЬКО на train_users
+train_users_set = set(train_users)
+
+user_to_groups = {u: g for u, g in user_to_groups.items() if u in train_users_set}
+group_to_users = build_group_to_users(user_to_groups)
+group_popularity = build_group_popularity(group_to_users)
+all_group_ids = list(group_to_users.keys())
+
+print(f"[INFO] After filter: {len(user_to_groups)} users, {len(group_to_users)} groups")
+
+train_users = list(train_users)
+test_users = list(test_users)
+
+joblib.dump(train_users, "train_users.pkl")
+joblib.dump(test_users, "test_users.pkl")
+
+print(f"[INFO] Train users: {len(train_users)}")
+print(f"[INFO] Test users: {len(test_users)}")
+print("[INFO] Saved split to train_users.pkl and test_users.pkl")
 
 dataset_rows = []
 positive_count = 0
 negative_count = 0
 dataset_start = time.time()
 
-for idx, user_id in enumerate(eligible_users, 1):
+for idx, user_id in enumerate(train_users, 1):
     user_start = time.time()
     real_groups = set(user_to_groups[user_id])
 
-    print(f"\n[USER {idx}/{len(eligible_users)}] user_id={user_id} real_groups={len(real_groups)}")
+    print(f"\n[USER {idx}/{len(train_users)}] user_id={user_id} real_groups={len(real_groups)}")
 
-    # отбираем группы пользователя, позитив
     targets = sample_leave_one_out_targets(
         real_groups=real_groups,
         max_positives_per_user=MAX_POSITIVES_PER_USER,
-        random_seed=RANDOM_SEED + idx
+        random_seed=RANDOM_SEED + idx,
     )
 
     print(f"[USER {idx}] positive targets count={len(targets)}")
 
-    # формируем профиль пользователя, удаляя позитив
     for target_group in targets:
         profile_groups = real_groups - {target_group}
 
@@ -120,7 +146,11 @@ for idx, user_id in enumerate(eligible_users, 1):
         print(f"[USER {idx}] target_group={target_group} profile_size={len(profile_groups)}")
 
         t0 = time.time()
-        profile_members = build_profile_members(profile_groups, group_to_users)
+        profile_members = build_profile_members(
+            profile_groups=profile_groups,
+            group_to_users=group_to_users,
+            target_user_id=user_id,
+        )
         print(f"[USER {idx}] profile_members={len(profile_members)} built in {time.time() - t0:.2f} sec")
 
         t0 = time.time()
@@ -133,6 +163,7 @@ for idx, user_id in enumerate(eligible_users, 1):
             min_similarity=MIN_USER_SIMILARITY,
             min_common_groups=MIN_COMMON_GROUPS,
             max_group_popularity=MAX_GROUP_POPULARITY,
+            target_user_id=user_id,
         )
         print(f"[USER {idx}] user-based candidates={len(user_based_scores)} in {time.time() - t0:.2f} sec")
 
@@ -146,13 +177,13 @@ for idx, user_id in enumerate(eligible_users, 1):
                 min_item_similarity=MIN_ITEM_SIMILARITY,
                 min_item_support=MIN_ITEM_SUPPORT,
                 max_item_candidates=MAX_ITEM_CANDIDATES,
+                target_user_id=user_id,
             )
             print(f"[USER {idx}] item-based candidates={len(item_based_scores)} in {time.time() - t0:.2f} sec")
         else:
             item_based_scores = {}
             print(f"[USER {idx}] item-based disabled")
 
-        # positive row
         pos_features = extract_feature_dict_for_profile_candidate(
             profile_groups=profile_groups,
             candidate_group=target_group,
@@ -160,12 +191,12 @@ for idx, user_id in enumerate(eligible_users, 1):
             item_based_scores=item_based_scores,
             group_to_users=group_to_users,
             profile_members=profile_members,
+            target_user_id=user_id,
         )
 
         dataset_rows.append([user_id, target_group, 1] + [pos_features[f] for f in feature_names])
         positive_count += 1
 
-        # negative rows
         negative_groups = sample_negative_groups(
             real_groups=real_groups,
             user_based_scores=user_based_scores,
@@ -189,6 +220,7 @@ for idx, user_id in enumerate(eligible_users, 1):
                 item_based_scores=item_based_scores,
                 group_to_users=group_to_users,
                 profile_members=profile_members,
+                target_user_id=user_id,
             )
             dataset_rows.append([user_id, neg_group, 0] + [neg_features[f] for f in feature_names])
             negative_count += 1
