@@ -73,7 +73,6 @@ docker exec -it vk_clickhouse clickhouse-client --user vk_user --password vk_pas
 3. Запустить DAG
 Нажми на кнопку Play (треугольник) справа от названия DAG.
 
-Порядок выполнения пока без модельки
 
 
 
