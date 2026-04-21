@@ -7,7 +7,7 @@
 Добавь токен в файл `.env` исходя из описания `.env.example`
 
 
-## 2. Активация окружения (локально)
+## 2. Активация окружения 
 
 .\.venv\Scripts\Activate.ps1   # Windows PowerShell
 
@@ -25,16 +25,16 @@ docker cp . airflow_webserver:/opt/airflow/project/
 Команды для запуска скриптов (внутри контейнера)
 Все команды выполняются из PowerShell / терминала:
 
-### 1. Получить мои группы (не обязательен для запуска тк датасет сформирован)
+### 1. Получить мои группы
 docker exec -it airflow_webserver bash -c "cd /opt/airflow/project && python get_my_groups.py"
 
-### 2. Собрать участников моих групп (не обязательен для запуска тк датасет сформирован)
+### 2. Собрать участников моих групп 
 docker exec -it airflow_webserver bash -c "cd /opt/airflow/project && python collect_members.py"
 
-### 3. Собрать группы участников (не обязательен для запуска тк датасет сформирован - ультрадолго ждать)
+### 3. Собрать группы участников 
 docker exec -it airflow_webserver bash -c "cd /opt/airflow/project && python collect_user_groups.py"
 
-### 4. Baseline (самые популярные группы из датасета)
+### 4. Baseline
 docker exec -it airflow_webserver bash -c "cd /opt/airflow/project && python baseline.py"
 
 ### 5. User-based рекомендации
