@@ -28,10 +28,10 @@ RANDOM_SEED = 42
 random.seed(RANDOM_SEED)
 
 MIN_USER_GROUPS = 5
-MAX_USERS_FOR_DATASET = 500
+MAX_USERS_FOR_DATASET = 300
 
 MAX_POSITIVES_PER_USER = 3
-NEGATIVES_PER_POSITIVE = 4
+NEGATIVES_PER_POSITIVE = 10
 
 TOP_K_SIMILAR_USERS = 20
 TOP_USER_BASED_CANDIDATES = 50
@@ -97,7 +97,6 @@ train_users, test_users = train_test_split(
     shuffle=True,
 )
 
-# ФИКС: перестраиваем словари ТОЛЬКО на train_users
 train_users_set = set(train_users)
 
 user_to_groups = {u: g for u, g in user_to_groups.items() if u in train_users_set}
@@ -204,7 +203,7 @@ for idx, user_id in enumerate(train_users, 1):
             all_group_ids=all_group_ids,
             group_popularity=group_popularity,
             negatives_per_positive=NEGATIVES_PER_POSITIVE,
-            hard_ratio=0.5,
+            hard_ratio=0.2,
             min_group_size=MIN_GROUP_SIZE,
             top_user_based_candidates=TOP_USER_BASED_CANDIDATES,
             top_item_based_candidates=TOP_ITEM_BASED_CANDIDATES,

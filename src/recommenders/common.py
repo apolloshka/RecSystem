@@ -264,34 +264,48 @@ def sample_negative_groups(
     item_based_scores: dict[int, float],
     all_group_ids: list[int],
     group_popularity: dict[int, int],
-    negatives_per_positive: int = 4,
-    hard_ratio: float = 0.3,
+    negatives_per_positive: int = 10,
+    hard_ratio: float = 0.2,
     min_group_size: int = 3,
     top_user_based_candidates: int = 50,
     top_item_based_candidates: int = 50,
 ) -> list[int]:
     """
-    Важно: hard negatives берутся из ТОП-а, а не из хвоста.
+    Семплирует negative groups.
+
+    Важно:
+    - hard negatives берем из top user/item candidates;
+    - hard negatives НЕ должны доминировать, иначе модель учится,
+      что хорошие CF-кандидаты = negative;
+    - если hard_ratio маленький, hard negatives могут отсутствовать.
     """
-    hard_needed = max(1, int(round(negatives_per_positive * hard_ratio)))
-    selected = []
+    selected: list[int] = []
+
+    hard_needed = int(round(negatives_per_positive * hard_ratio))
 
     hard_pool_user = [
         group_id
         for group_id, _ in sorted(user_based_scores.items(), key=lambda x: x[1], reverse=True)
-        if group_id not in real_groups and group_popularity.get(group_id, 0) >= min_group_size
+        if group_id not in real_groups
+        and group_popularity.get(group_id, 0) >= min_group_size
     ][:top_user_based_candidates]
 
     hard_pool_item = [
         group_id
         for group_id, _ in sorted(item_based_scores.items(), key=lambda x: x[1], reverse=True)
-        if group_id not in real_groups and group_popularity.get(group_id, 0) >= min_group_size
+        if group_id not in real_groups
+        and group_popularity.get(group_id, 0) >= min_group_size
     ][:top_item_based_candidates]
 
     hard_pool = list(set(hard_pool_user) | set(hard_pool_item))
 
-    if hard_pool:
-        selected.extend(random.sample(hard_pool, min(hard_needed, len(hard_pool))))
+    if hard_needed > 0 and hard_pool:
+        selected.extend(
+            random.sample(
+                hard_pool,
+                min(hard_needed, len(hard_pool)),
+            )
+        )
 
     random_pool = [
         group_id
@@ -302,7 +316,13 @@ def sample_negative_groups(
     ]
 
     need = negatives_per_positive - len(selected)
+
     if need > 0 and random_pool:
-        selected.extend(random.sample(random_pool, min(need, len(random_pool))))
+        selected.extend(
+            random.sample(
+                random_pool,
+                min(need, len(random_pool)),
+            )
+        )
 
     return selected
