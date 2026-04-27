@@ -1,5 +1,4 @@
 import os
-import random
 import time
 
 import joblib
@@ -17,6 +16,28 @@ from src.recommenders.common import (
     get_item_based_scores_for_profile,
     extract_feature_dict_for_profile_candidate,
 )
+from src.recommenders.config import (
+    TOP_K_SIMILAR_USERS,
+    MIN_GROUP_SIZE,
+    MIN_USER_SIMILARITY,
+    MIN_COMMON_GROUPS,
+    MAX_GROUP_POPULARITY,
+    MIN_ITEM_GROUP_SIZE,
+    MIN_ITEM_SIMILARITY,
+    MIN_ITEM_SUPPORT,
+    MAX_ITEM_CANDIDATES,
+    ENABLE_ITEM_BASED,
+    TOP_USER_BASED_CANDIDATES,
+    TOP_ITEM_BASED_CANDIDATES,
+    TOP_BASELINE_BLACKLIST,
+    MAX_RECOMMENDED_GROUP_POPULARITY,
+    MIN_CF_SCORE,
+    MIN_MAX_GROUP_SIMILARITY,
+    MODEL_BUNDLE_PATH,
+    FEATURE_NAMES_PATH,
+    TRAIN_USERS_PATH,
+    TOP_K_RECOMMENDATIONS,
+)
 
 print("=== ML Predictor for my_groups ===")
 
@@ -25,35 +46,10 @@ VK_TOKEN = os.getenv("VK_TOKEN")
 VK_API_VERSION = os.getenv("VK_API_VERSION", "5.131")
 
 client = get_client()
-
-TOP_K_SIMILAR_USERS = 50
-MIN_GROUP_SIZE = 3
-MIN_USER_SIMILARITY = 0.01
-MIN_COMMON_GROUPS = 1
-MAX_GROUP_POPULARITY = 1000
-
-MIN_ITEM_GROUP_SIZE = 20
-MIN_ITEM_SIMILARITY = 0.02
-MIN_ITEM_SUPPORT = 2
-MAX_ITEM_CANDIDATES = 5000
-
-ENABLE_ITEM_BASED = True
-
-TOP_CANDIDATES_FROM_USER_BASED = 1000
-TOP_CANDIDATES_FROM_ITEM_BASED = 1000
-
-# Важно: baseline теперь НЕ добавляет кандидатов,
-# а исключает слишком популярные общие группы.
-TOP_BASELINE_BLACKLIST = 1000
-
-MAX_RECOMMENDED_GROUP_POPULARITY = 80
-MIN_CF_SCORE = 0.001
-MIN_MAX_GROUP_SIMILARITY = 0.02
-
-train_users = joblib.load("train_users.pkl")
-model = joblib.load("recommendation_model.pkl")
-scaler = joblib.load("feature_scaler.pkl")
-feature_names = joblib.load("feature_names.pkl")
+train_users = joblib.load(TRAIN_USERS_PATH)
+model_bundle = joblib.load(MODEL_BUNDLE_PATH)
+pipeline = model_bundle["pipeline"]
+feature_names = model_bundle.get("feature_names", joblib.load(FEATURE_NAMES_PATH))
 
 print(f"Loaded feature_names: {feature_names}")
 
@@ -125,7 +121,7 @@ profile_members = build_profile_members(
 
 print(f"profile_members: {len(profile_members)}")
 
-baseline_blacklist = {
+baseline_blacklist = [
     gid
     for gid, pop in sorted(
         group_popularity.items(),
@@ -133,9 +129,9 @@ baseline_blacklist = {
         reverse=True,
     )
     if gid not in my_groups and pop >= MIN_GROUP_SIZE
-}
+]
 
-baseline_blacklist = set(list(baseline_blacklist)[:TOP_BASELINE_BLACKLIST])
+baseline_blacklist = set(baseline_blacklist[:TOP_BASELINE_BLACKLIST])
 
 print(f"Baseline blacklist: {len(baseline_blacklist)}")
 
@@ -147,7 +143,7 @@ user_based_candidates = [
         reverse=True,
     )
     if gid not in my_groups
-][:TOP_CANDIDATES_FROM_USER_BASED]
+][:TOP_USER_BASED_CANDIDATES]
 
 item_based_candidates = [
     gid
@@ -157,7 +153,7 @@ item_based_candidates = [
         reverse=True,
     )
     if gid not in my_groups
-][:TOP_CANDIDATES_FROM_ITEM_BASED]
+][:TOP_ITEM_BASED_CANDIDATES]
 
 candidates = set(user_based_candidates) | set(item_based_candidates)
 candidates = candidates - my_groups
@@ -266,18 +262,18 @@ def predict(group_id: int) -> float:
     }
 
     features_df = pd.DataFrame([feature_dict], columns=feature_names)
-    features_scaled = scaler.transform(features_df)
-
-    return float(model.predict_proba(features_scaled)[0][1])
+    raw_prob = float(pipeline.predict_proba(features_df)[0][1])
+    return raw_prob
 
 
 print("Predicting...")
 
-preds = [
-    (gid, predict(gid))
-    for gid in candidates
-]
+preds = []
+for gid in candidates:
+    raw_prob = predict(gid)
+    preds.append((gid, raw_prob))
 
+# Rank by raw model score to avoid calibration plateaus.
 preds.sort(key=lambda x: x[1], reverse=True)
 
 all_probs = [p for _, p in preds]
@@ -290,24 +286,23 @@ if all_probs:
 print("Fetching names for top-30...")
 
 top_30 = []
-
-for gid, prob in preds[:30]:
+for gid, raw_prob in preds[:TOP_K_RECOMMENDATIONS]:
     name = get_group_name_safe(gid)
-    top_30.append((gid, name, prob))
+    top_30.append((gid, name, raw_prob))
 
 print("\n" + "=" * 70)
-print("TOP-30 RECOMMENDATIONS (ML Model)")
+print(f"TOP-{TOP_K_RECOMMENDATIONS} RECOMMENDATIONS (ML Model)")
 print("=" * 70)
 
-for i, (gid, name, prob) in enumerate(top_30, 1):
-    print(f"{i:2d}. {gid:10d} | {name[:45]:45} | {prob:.2%}")
+for i, (gid, name, raw_prob) in enumerate(top_30, 1):
+    print(f"{i:2d}. {gid:10d} | {name[:45]:45} | {raw_prob:.2%}")
 
 print("=" * 70)
 
 with open("ml_recommendations.txt", "w", encoding="utf-8") as f:
     f.write("ML Model Recommendations\n" + "=" * 70 + "\n")
 
-    for i, (gid, name, prob) in enumerate(top_30, 1):
-        f.write(f"{i:2d}. {gid} | {name} | {prob:.2%}\n")
+    for i, (gid, name, raw_prob) in enumerate(top_30, 1):
+        f.write(f"{i:2d}. {gid} | {name} | {raw_prob:.2%}\n")
 
 print("\nSaved to ml_recommendations.txt")

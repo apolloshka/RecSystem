@@ -4,34 +4,27 @@ import pandas as pd
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
-    classification_report,
-    f1_score,
-    precision_score,
-    recall_score,
     roc_auc_score,
 )
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-
 from src.db.clickhouse_client import get_client
+
+from src.recommenders.config import (
+    RANDOM_SEED,
+    MODEL_FEATURE_NAMES,
+    MODEL_PATH,
+    SCALER_PATH,
+    FEATURE_NAMES_PATH,
+    MODEL_BUNDLE_PATH,
+)
 
 print("=== Training Logistic Regression ===")
 
-RANDOM_SEED = 42
-
 client = get_client()
 
-feature_names = [
-    "group_popularity",
-    "log_group_popularity",
-    "user_based_score",
-    "item_based_score",
-    "max_group_similarity",
-    "sum_group_similarity",
-    "common_members_with_profile",
-    "is_in_both_recs",
-]
+feature_names = MODEL_FEATURE_NAMES
 
 columns = ["user_id", "candidate_group_id", "label"] + feature_names + ["created_at"]
 
@@ -62,26 +55,10 @@ print(f"Positive: {(y == 1).sum()}, Negative: {(y == 0).sum()}")
 if y.nunique() < 2:
     raise ValueError("Need both classes in ml_dataset to train the model.")
 
-splitter = GroupShuffleSplit(
-    n_splits=1,
-    test_size=0.2,
-    random_state=RANDOM_SEED,
-)
-train_idx, test_idx = next(splitter.split(X, y, groups=groups))
-
-train_df = df.iloc[train_idx].copy()
-test_df = df.iloc[test_idx].copy()
-
-X_train = train_df[feature_names]
-y_train = train_df["label"]
-X_test = test_df[feature_names]
-y_test = test_df["label"]
-
-train_groups = train_df["user_id"]
-test_groups = test_df["user_id"]
-
-print(f"Train rows: {len(train_df)}, users: {train_groups.nunique()}")
-print(f"Test rows: {len(test_df)}, users: {test_groups.nunique()}")
+X_train = X
+y_train = y
+train_groups = groups
+print(f"Train rows: {len(X_train)}, users: {train_groups.nunique()}")
 
 pipeline = Pipeline(
     steps=[
@@ -120,29 +97,24 @@ pipeline.fit(X_train, y_train)
 
 scaler = pipeline.named_steps["scaler"]
 model = pipeline.named_steps["model"]
+y_pred_proba = pipeline.predict_proba(X_train)[:, 1]
+train_auc = roc_auc_score(y_train, y_pred_proba)
+print("\n--- In-sample metric (for sanity only) ---")
+print(f"Train ROC-AUC: {train_auc:.4f}")
+print("Use evaluate_ranking.py for proper ranking quality on held-out users.")
 
-y_pred_proba = pipeline.predict_proba(X_test)[:, 1]
-y_pred = pipeline.predict(X_test)
+joblib.dump(model, MODEL_PATH)
+joblib.dump(scaler, SCALER_PATH)
+joblib.dump(feature_names, FEATURE_NAMES_PATH)
+joblib.dump(
+    {
+        "pipeline": pipeline,
+        "feature_names": feature_names,
+    },
+    MODEL_BUNDLE_PATH,
+)
 
-test_auc = roc_auc_score(y_test, y_pred_proba)
-test_f1 = f1_score(y_test, y_pred, zero_division=0)
-test_precision = precision_score(y_test, y_pred, zero_division=0)
-test_recall = recall_score(y_test, y_pred, zero_division=0)
-
-print("\n--- Final classification metrics on held-out users ---")
-print(f"Test ROC-AUC: {test_auc:.4f}")
-print(f"Test Precision: {test_precision:.4f}")
-print(f"Test Recall: {test_recall:.4f}")
-print(f"Test F1-Score: {test_f1:.4f}")
-
-print("\nClassification Report:")
-print(classification_report(y_test, y_pred, target_names=["Negative", "Positive"], zero_division=0))
-
-joblib.dump(model, "recommendation_model.pkl")
-joblib.dump(scaler, "feature_scaler.pkl")
-joblib.dump(feature_names, "feature_names.pkl")
-
-print("\nModel, scaler and feature_names saved successfully.")
+print("\nModel, scaler, feature_names and model bundle saved successfully.")
 
 coefficients = model.coef_[0]
 importance_df = pd.DataFrame(
