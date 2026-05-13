@@ -10,9 +10,9 @@ TOKEN = os.getenv("VK_TOKEN")
 V = os.getenv("VK_API_VERSION", "5.131")
 API_URL = "https://api.vk.com/method/"
 
-USERS_PER_GROUP = 350          # сколько брать из каждой группы
-BATCH_SIZE = 20               # сколько пользователей в одном execute запросе
-SLEEP_BETWEEN_BATCHES = 2.0    # задержка между батчами
+USERS_PER_GROUP = 250         # сколько брать из каждой группы
+BATCH_SIZE = 15               # сколько пользователей в одном execute запросе
+SLEEP_BETWEEN_BATCHES = 5.0    # задержка между батчами
 
 
 def vk_call(method, params=None, retry=3):
@@ -33,7 +33,7 @@ def vk_call(method, params=None, retry=3):
 
         if "error" in data:
             error_code = data["error"].get("error_code")
-            if error_code in (6, 9):  # Rate limit or Flood control
+            if error_code in (6, 9):  
                 wait_time = 30 * (attempt + 1)
                 print(f"  Rate limit (error {error_code}), waiting {wait_time}s...")
                 time.sleep(wait_time)

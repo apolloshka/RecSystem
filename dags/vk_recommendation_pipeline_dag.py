@@ -61,11 +61,6 @@ with DAG(
         bash_command=f"cd {PROJECT_DIR} && python train_logistic_regression.py",
     )
 
-    evaluate_ranking = BashOperator(
-        task_id="evaluate_ranking",
-        bash_command=f"cd {PROJECT_DIR} && python evaluate_ranking.py",
-    )
-
     predict_for_user = BashOperator(
         task_id="predict_for_user",
         bash_command=f"cd {PROJECT_DIR} && python predict_for_user.py",
@@ -84,9 +79,9 @@ with DAG(
     collect_user_groups >> user_based
     collect_user_groups >> item_based
 
-    # ML
+    # ML (evaluate_ranking удалён, поэтому train_logistic_regression теперь идёт сразу в predict_for_user)
     [collect_user_groups, user_based, item_based] >> build_ml_dataset
-    build_ml_dataset >> train_logistic_regression >> evaluate_ranking >> predict_for_user
+    build_ml_dataset >> train_logistic_regression >> predict_for_user
 
     # Сравнение всех алгоритмов
     [baseline, user_based, item_based, predict_for_user] >> compare_algorithms

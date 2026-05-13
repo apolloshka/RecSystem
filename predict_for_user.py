@@ -273,7 +273,6 @@ for gid in candidates:
     raw_prob = predict(gid)
     preds.append((gid, raw_prob))
 
-# Rank by raw model score to avoid calibration plateaus.
 preds.sort(key=lambda x: x[1], reverse=True)
 
 all_probs = [p for _, p in preds]
