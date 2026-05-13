@@ -1,6 +1,6 @@
 import math
 import random
-from collections import defaultdict, Counter
+from collections import Counter, defaultdict
 
 
 def jaccard(a: set, b: set) -> float:
@@ -11,14 +11,14 @@ def jaccard(a: set, b: set) -> float:
     return inter / union
 
 
-def build_user_to_groups(result_rows) -> dict:
+def build_user_to_groups(result_rows) -> dict[int, set[int]]:
     user_to_groups = defaultdict(set)
     for user_id, group_id in result_rows:
         user_to_groups[int(user_id)].add(int(group_id))
     return user_to_groups
 
 
-def build_group_to_users(user_to_groups: dict) -> dict:
+def build_group_to_users(user_to_groups: dict[int, set[int]]) -> dict[int, set[int]]:
     group_to_users = defaultdict(set)
     for user_id, groups in user_to_groups.items():
         for group_id in groups:
@@ -26,30 +26,46 @@ def build_group_to_users(user_to_groups: dict) -> dict:
     return group_to_users
 
 
-def build_group_popularity(group_to_users: dict) -> dict:
+def build_group_popularity(group_to_users: dict[int, set[int]]) -> dict[int, int]:
     return {gid: len(users) for gid, users in group_to_users.items()}
 
 
-def build_profile_members(profile_groups: set, group_to_users: dict) -> set:
+def build_profile_members(
+    profile_groups: set[int],
+    group_to_users: dict[int, set[int]],
+    target_user_id: int | None = None,
+) -> set[int]:
     members = set()
-    for g in profile_groups:
-        members |= group_to_users.get(g, set())
+    for group_id in profile_groups:
+        users = set(group_to_users.get(group_id, set()))
+        if target_user_id is not None:
+            users.discard(target_user_id)
+        members |= users
     return members
 
 
 def get_user_based_scores_for_profile(
-    profile_groups: set,
-    all_user_groups: dict,
-    group_popularity: dict,
+    profile_groups: set[int],
+    all_user_groups: dict[int, set[int]],
+    group_popularity: dict[int, int],
     top_k_users: int = 50,
     min_group_size: int = 3,
     min_similarity: float = 0.01,
     min_common_groups: int = 1,
-    max_group_popularity: int = 1000000,
-) -> dict:
+    max_group_popularity: int = 1_000_000,
+    target_user_id: int | None = None,
+) -> dict[int, float]:
+    """
+    User-based CF.
+    Важно: target_user_id исключается из кандидатов похожих пользователей,
+    чтобы юзер не "находил сам себя".
+    """
     similar_users = []
 
     for other_user_id, other_groups in all_user_groups.items():
+        if target_user_id is not None and other_user_id == target_user_id:
+            continue
+
         common_groups = len(profile_groups & other_groups)
         if common_groups < min_common_groups:
             continue
@@ -66,41 +82,48 @@ def get_user_based_scores_for_profile(
     scores = defaultdict(float)
 
     for _, sim, other_groups, _ in top_users:
-        for g in other_groups:
-            if g in profile_groups:
+        for group_id in other_groups:
+            if group_id in profile_groups:
                 continue
 
-            pop = group_popularity.get(g, 0)
+            pop = group_popularity.get(group_id, 0)
             if pop < min_group_size:
                 continue
             if pop > max_group_popularity:
                 continue
 
-            scores[g] += sim
+            scores[group_id] += sim
 
     final_scores = {}
-    for g, score in scores.items():
-        popularity_penalty = math.log1p(group_popularity.get(g, 0))
+    for group_id, score in scores.items():
+        popularity_penalty = math.log1p(group_popularity.get(group_id, 0))
         if popularity_penalty <= 0:
             continue
-        final_scores[g] = score / popularity_penalty
+        final_scores[group_id] = score / popularity_penalty
 
     return final_scores
 
 
 def get_item_based_scores_for_profile(
-    profile_groups: set,
-    group_to_users: dict,
-    user_to_groups: dict,
+    profile_groups: set[int],
+    group_to_users: dict[int, set[int]],
+    user_to_groups: dict[int, set[int]],
     min_item_group_size: int = 20,
     min_item_similarity: float = 0.02,
     min_item_support: int = 1,
     max_item_candidates: int = 5000,
-) -> dict:
+    target_user_id: int | None = None,
+) -> dict[int, float]:
+    """
+    Item-based CF по схожести аудиторий групп.
+    Важно: target_user_id исключается из аудиторий всех групп при расчете.
+    """
     candidate_counts = Counter()
 
     for profile_group in profile_groups:
-        users_a = group_to_users.get(profile_group, set())
+        users_a = set(group_to_users.get(profile_group, set()))
+        if target_user_id is not None:
+            users_a.discard(target_user_id)
 
         if len(users_a) < min_item_group_size:
             continue
@@ -114,22 +137,34 @@ def get_item_based_scores_for_profile(
     if not candidate_counts:
         return {}
 
+    def group_size_without_target(group_id: int) -> int:
+        users = set(group_to_users.get(group_id, set()))
+        if target_user_id is not None:
+            users.discard(target_user_id)
+        return len(users)
+
     candidate_groups = [
-        g for g, _ in candidate_counts.most_common(max_item_candidates)
-        if len(group_to_users.get(g, set())) >= min_item_group_size
+        group_id
+        for group_id, _ in candidate_counts.most_common(max_item_candidates)
+        if group_size_without_target(group_id) >= min_item_group_size
     ]
 
     scores = defaultdict(float)
     counts = defaultdict(int)
 
     for profile_group in profile_groups:
-        users_a = group_to_users.get(profile_group, set())
+        users_a = set(group_to_users.get(profile_group, set()))
+        if target_user_id is not None:
+            users_a.discard(target_user_id)
 
         if len(users_a) < min_item_group_size:
             continue
 
         for candidate_group in candidate_groups:
-            users_b = group_to_users.get(candidate_group, set())
+            users_b = set(group_to_users.get(candidate_group, set()))
+            if target_user_id is not None:
+                users_b.discard(target_user_id)
+
             if not users_b:
                 continue
 
@@ -141,51 +176,65 @@ def get_item_based_scores_for_profile(
             scores[candidate_group] += sim
 
     final_scores = {}
-    for g in scores:
-        if counts[g] < min_item_support:
+    for group_id in scores:
+        if counts[group_id] < min_item_support:
             continue
 
-        avg_score = scores[g] / counts[g]
-        popularity_penalty = math.log1p(len(group_to_users.get(g, set())))
+        avg_score = scores[group_id] / counts[group_id]
+        popularity_penalty = math.log1p(group_size_without_target(group_id))
         if popularity_penalty <= 0:
             continue
 
-        final_scores[g] = avg_score / popularity_penalty
+        final_scores[group_id] = avg_score / popularity_penalty
 
     return final_scores
 
 
 def extract_feature_dict_for_profile_candidate(
-    profile_groups: set,
+    profile_groups: set[int],
     candidate_group: int,
-    user_based_scores: dict,
-    item_based_scores: dict,
-    group_to_users: dict,
-    profile_members: set,
-) -> dict:
-    candidate_users = group_to_users.get(candidate_group, set())
+    user_based_scores: dict[int, float],
+    item_based_scores: dict[int, float],
+    group_to_users: dict[int, set[int]],
+    profile_members: set[int],
+    target_user_id: int | None = None,
+) -> dict[str, float]:
+    """
+    Безопасное извлечение признаков:
+    target_user_id исключается из candidate audience и из profile audiences.
+    """
+    candidate_users = set(group_to_users.get(candidate_group, set()))
+    if target_user_id is not None:
+        candidate_users.discard(target_user_id)
+
     group_pop = len(candidate_users)
 
     similarities = []
-    for g in profile_groups:
-        users_a = group_to_users.get(g, set())
+    for profile_group in profile_groups:
+        users_a = set(group_to_users.get(profile_group, set()))
+        if target_user_id is not None:
+            users_a.discard(target_user_id)
+
         if not users_a or not candidate_users:
             continue
+
         sim = jaccard(users_a, candidate_users)
         if sim > 0:
             similarities.append(sim)
 
-    max_group_similarity = max(similarities) if similarities else 0.0
-    sum_group_similarity = sum(similarities) if similarities else 0.0
-    common_members_with_profile = len(candidate_users & profile_members) if candidate_users else 0
+    profile_members_wo_user = set(profile_members)
+    if target_user_id is not None:
+        profile_members_wo_user.discard(target_user_id)
+
+    common_members_with_profile = len(candidate_users & profile_members_wo_user) if candidate_users else 0
 
     return {
         "group_popularity": float(group_pop),
         "log_group_popularity": float(math.log1p(group_pop)),
         "user_based_score": float(user_based_scores.get(candidate_group, 0.0)),
         "item_based_score": float(item_based_scores.get(candidate_group, 0.0)),
-        "max_group_similarity": float(max_group_similarity),
-        "sum_group_similarity": float(sum_group_similarity),
+        "max_group_similarity": float(max(similarities) if similarities else 0.0),
+        "sum_group_similarity": float(sum(similarities) if similarities else 0.0),
         "common_members_with_profile": float(common_members_with_profile),
         "is_in_both_recs": float(
             1.0 if candidate_group in user_based_scores and candidate_group in item_based_scores else 0.0
@@ -194,63 +243,86 @@ def extract_feature_dict_for_profile_candidate(
 
 
 def sample_leave_one_out_targets(
-    real_groups: set,
+    real_groups: set[int],
     max_positives_per_user: int = 3,
     random_seed: int | None = None,
-) -> list:
+) -> list[int]:
     groups_list = list(real_groups)
+
     if random_seed is not None:
         rnd = random.Random(random_seed)
         rnd.shuffle(groups_list)
     else:
         random.shuffle(groups_list)
-    return groups_list[:min(max_positives_per_user, len(groups_list))]
+
+    return groups_list[: min(max_positives_per_user, len(groups_list))]
 
 
 def sample_negative_groups(
-    real_groups: set,
-    user_based_scores: dict,
-    item_based_scores: dict,
-    all_group_ids: list,
-    group_popularity: dict,
-    negatives_per_positive: int = 4,
-    hard_ratio: float = 0.3,
+    real_groups: set[int],
+    user_based_scores: dict[int, float],
+    item_based_scores: dict[int, float],
+    all_group_ids: list[int],
+    group_popularity: dict[int, int],
+    negatives_per_positive: int = 10,
+    hard_ratio: float = 0.2,
     min_group_size: int = 3,
     top_user_based_candidates: int = 50,
     top_item_based_candidates: int = 50,
-) -> list:
-    hard_needed = max(1, int(round(negatives_per_positive * hard_ratio)))
-    random_needed = max(0, negatives_per_positive - hard_needed)
+) -> list[int]:
+    """
+    Семплирует negative groups.
 
-    # формируем пул сложных негатив групп, в которых не состоит пользователь, имеющихся в user-based рекомендациях для этого пользователя
+    Важно:
+    - hard negatives берем из top user/item candidates;
+    - hard negatives НЕ должны доминировать, иначе модель учится,
+      что хорошие CF-кандидаты = negative;
+    - если hard_ratio маленький, hard negatives могут отсутствовать.
+    """
+    selected: list[int] = []
+
+    hard_needed = int(round(negatives_per_positive * hard_ratio))
+
     hard_pool_user = [
-        g for g, _ in sorted(user_based_scores.items(), key=lambda x: x[1], reverse=True)
-        if g not in real_groups
-    ][-top_user_based_candidates:]
+        group_id
+        for group_id, _ in sorted(user_based_scores.items(), key=lambda x: x[1], reverse=True)
+        if group_id not in real_groups
+        and group_popularity.get(group_id, 0) >= min_group_size
+    ][:top_user_based_candidates]
 
-    # формируем пул сложных негатив групп, в которых не состоит пользователь, имеющихся в item-based рекомендациях для этого пользователя
     hard_pool_item = [
-        g for g, _ in sorted(item_based_scores.items(), key=lambda x: x[1], reverse=True)
-        if g not in real_groups
-    ][-top_item_based_candidates:]
+        group_id
+        for group_id, _ in sorted(item_based_scores.items(), key=lambda x: x[1], reverse=True)
+        if group_id not in real_groups
+        and group_popularity.get(group_id, 0) >= min_group_size
+    ][:top_item_based_candidates]
 
     hard_pool = list(set(hard_pool_user) | set(hard_pool_item))
 
-    selected = []
+    if hard_needed > 0 and hard_pool:
+        selected.extend(
+            random.sample(
+                hard_pool,
+                min(hard_needed, len(hard_pool)),
+            )
+        )
 
-    if hard_pool:
-        selected.extend(random.sample(hard_pool, min(hard_needed, len(hard_pool))))
-
-    # формируем пул негатив групп, в которых не состоит пользователь, имеющихся в user_groups 
     random_pool = [
-        g for g in all_group_ids
-        if g not in real_groups
-        and g not in selected
-        and group_popularity.get(g, 0) >= min_group_size
+        group_id
+        for group_id in all_group_ids
+        if group_id not in real_groups
+        and group_id not in selected
+        and group_popularity.get(group_id, 0) >= min_group_size
     ]
 
-    if random_pool and len(selected) < negatives_per_positive:
-        need = negatives_per_positive - len(selected)
-        selected.extend(random.sample(random_pool, min(need, len(random_pool))))
+    need = negatives_per_positive - len(selected)
+
+    if need > 0 and random_pool:
+        selected.extend(
+            random.sample(
+                random_pool,
+                min(need, len(random_pool)),
+            )
+        )
 
     return selected

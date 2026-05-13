@@ -12,7 +12,7 @@ API_URL = "https://api.vk.com/method/"
 
 DELAY_BETWEEN_REQUESTS = 1
 DELAY_ON_FLOOD = 120
-MAX_MEMBERS_PER_GROUP = 2000  # максимум участников с группы
+MAX_MEMBERS_PER_GROUP = 1000
 
 
 def vk_call(method, params=None, retry=3):
@@ -53,7 +53,7 @@ def collect_group_members(group_id):
     offset = 0
     count = 1000
 
-    while offset < MAX_MEMBERS_PER_GROUP:  # ← ограничение
+    while offset < MAX_MEMBERS_PER_GROUP:
         remaining = MAX_MEMBERS_PER_GROUP - offset
         current_count = min(count, remaining)
         
@@ -94,6 +94,7 @@ print("Seed groups used:", my_groups)
 truncate_group_members()
 
 total_members = 0
+all_members = set()  # ← для сохранения в файл
 
 for idx, group_id in enumerate(my_groups, 1):
     print(f"\n[{idx}/{len(my_groups)}] Collecting members from group: {group_id}")
@@ -102,6 +103,7 @@ for idx, group_id in enumerate(my_groups, 1):
 
     if members:
         insert_group_members(group_id, members)
+        all_members.update(members)  # ← добавляем в общее множество
         total_members += len(members)
         print(f"  Collected members: {len(members)} (max {MAX_MEMBERS_PER_GROUP})")
     else:
@@ -113,10 +115,11 @@ for idx, group_id in enumerate(my_groups, 1):
 
 print(f"\nFinished collecting group members")
 print(f"Total members collected: {total_members}")
+print(f"Unique members: {len(all_members)}")
 
-# Сохраняем в файл для бэкапа
+# Сохраняем ВСЕХ уникальных участников в файл для бэкапа
 with open("members.txt", "w", encoding="utf-8") as f:
-    for uid in members:
+    for uid in all_members:
         f.write(str(uid) + "\n")
 
-print("File: members.txt")
+print(f"File: members.txt ({len(all_members)} unique users)")

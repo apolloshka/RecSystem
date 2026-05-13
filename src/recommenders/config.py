@@ -1,0 +1,58 @@
+RANDOM_SEED = 42
+DATASET_BUILD_WORKERS = 6
+DATASET_BUILD_CHUNK_SIZE = 15
+DATASET_BUILD_BACKEND = "process"
+
+MIN_USER_GROUPS = 8
+MAX_USERS_FOR_DATASET = 2000
+MAX_POSITIVES_PER_USER = 3
+NEGATIVES_PER_POSITIVE = 5
+NEGATIVE_HARD_RATIO = 0.2
+
+TOP_K_SIMILAR_USERS = 20
+TOP_USER_BASED_CANDIDATES = 800
+TOP_ITEM_BASED_CANDIDATES = 800
+
+MIN_GROUP_SIZE = 3
+MIN_USER_SIMILARITY = 0.01
+MIN_COMMON_GROUPS = 1
+MAX_GROUP_POPULARITY = 500
+
+MIN_ITEM_GROUP_SIZE = 20
+MIN_ITEM_SIMILARITY = 0.02
+MIN_ITEM_SUPPORT = 2
+MAX_ITEM_CANDIDATES = 3000
+
+ENABLE_ITEM_BASED = True
+
+TOP_BASELINE_BLACKLIST = 1000
+MAX_RECOMMENDED_GROUP_POPULARITY = 10000
+MIN_CF_SCORE = 0.01
+MIN_MAX_GROUP_SIMILARITY = 0.01
+
+TOP_K_RECOMMENDATIONS = 30
+
+MODEL_FEATURE_NAMES = [
+    "group_popularity",
+    "log_group_popularity",
+    "user_based_score",
+    "item_based_score",
+    "max_group_similarity",
+    "sum_group_similarity",
+    "common_members_with_profile",
+    "is_in_both_recs",
+]
+
+MODEL_PATH = "recommendation_model.pkl"
+SCALER_PATH = "feature_scaler.pkl"
+FEATURE_NAMES_PATH = "feature_names.pkl"
+MODEL_BUNDLE_PATH = "recommendation_model_bundle.pkl"
+
+TRAIN_USERS_PATH = "train_users.pkl"
+TEST_USERS_PATH = "test_users.pkl"
+
+RANKING_EVAL_CSV_PATH = "ranking_eval_results.csv"
+RANKING_GATE_MIN_RECALL_AT_10 = 0.10
+RANKING_EVAL_MAX_USERS = 10
+RANKING_EVAL_PROGRESS_EVERY = 10
+

@@ -79,7 +79,7 @@ with DAG(
     collect_user_groups >> user_based
     collect_user_groups >> item_based
 
-    # ML
+    # ML (evaluate_ranking удалён, поэтому train_logistic_regression теперь идёт сразу в predict_for_user)
     [collect_user_groups, user_based, item_based] >> build_ml_dataset
     build_ml_dataset >> train_logistic_regression >> predict_for_user
 

@@ -36,8 +36,11 @@ def insert_user_groups(user_groups: dict):
     client = get_client()
     rows = []
     for user_id, groups in user_groups.items():
+        if not groups:  # пропускаем пустые
+            continue
         for group_id in groups:
-            rows.append((int(user_id), int(group_id)))
+            if group_id is not None:  # дополнительная проверка
+                rows.append((int(user_id), int(group_id)))
     if rows:
         client.insert("user_groups", rows, column_names=["user_id", "group_id"])
 
